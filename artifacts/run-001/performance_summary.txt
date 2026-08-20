@@ -1,0 +1,37 @@
+OCR benchmark performance summary
+
+Aggregate rankings use micro-averaged CER (total edit distance / total reference characters).
+Lower CER is better. Individual-case ties show one deterministic example.
+
+English
+-
+- Best overall method: binning_floor (0.93% CER)
+- Worst overall method: binning_ceil (2.70% CER)
+- Best scaling ratio: 1.000× (0.80% CER)
+- Worst scaling ratio: 1.133× (2.61% CER)
+- Best method×ratio condition: binning_ceil at 1.933× (0.27% CER)
+- Worst method×ratio condition: binning_ceil at 1.133× (8.27% CER)
+- Best individual case: pattern=en_char_8, method=binning_ceil, ratio=1.000, CER=0.00%, reference='8', prediction='8' (1234 cases tied at this CER)
+- Worst individual case: pattern=en_line_05, method=binning_ceil, ratio=1.133, CER=50.00%, reference='AbCdEfGhIjKlMnOpQrStUvWxYz', prediction='ABCAEFGNTKANnOpgrStUVHAY'
+
+Traditional Chinese
+-
+- Best overall method: lanczos3 (14.78% CER)
+- Worst overall method: binning_floor (20.96% CER)
+- Best scaling ratio: 2.733× (12.00% CER)
+- Worst scaling ratio: 1.000× (22.50% CER)
+- Best method×ratio condition: lanczos3 at 2.067× (3.75% CER)
+- Worst method×ratio condition: binning_ceil at 1.133× (56.25% CER)
+- Best individual case: pattern=zh_char_01, method=binning_ceil, ratio=1.000, CER=0.00%, reference='做', prediction='做' (577 cases tied at this CER)
+- Worst individual case: pattern=zh_char_02, method=lanczos3, ratio=1.267, CER=200.00%, reference='剪', prediction='選】'
+
+Combined
+-
+- Best overall method: lanczos3 (3.62% CER)
+- Worst overall method: binning_ceil (5.40% CER)
+- Best scaling ratio: 2.733× (2.86% CER)
+- Worst scaling ratio: 1.133× (5.85% CER)
+- Best method×ratio condition: lanczos3 at 1.800× (1.54% CER, 3 tied)
+- Worst method×ratio condition: binning_ceil at 1.133× (16.70% CER)
+- Best individual case: pattern=en_char_8, method=binning_ceil, ratio=1.000, CER=0.00%, reference='8', prediction='8' (1811 cases tied at this CER)
+- Worst individual case: pattern=zh_char_02, method=lanczos3, ratio=1.267, CER=200.00%, reference='剪', prediction='選】'
