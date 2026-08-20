@@ -1,0 +1,171 @@
+target_height_px: 16
+ink_threshold: 250
+ignore_punctuation_in_glyph_height: true
+padding_target_px: 16
+line_spacing_target_px: 8
+canvas_multiple: 6
+ratio_grid:
+  start: 1.0
+  stop: 3.0
+  count: 16
+  extra: [2.625]
+fonts:
+  en:
+    path: fonts/Consolas-Regular.ttf
+    index: 0
+    expected_family: Consolas
+  zh_tra:
+    path: fonts/microsoft-jhenghei.ttf
+    index: 0
+    expected_family: Microsoft JhengHei
+tesseract:
+  executable: tesseract
+  tessdata_dir: tessdata
+  oem: 1
+  timeout_seconds: 60
+patterns:
+  - id: en_char_a
+    language: en
+    layout: single_char
+    psm: 10
+    text: "A"
+  - id: en_char_8
+    language: en
+    layout: single_char
+    psm: 10
+    text: "8"
+  - id: en_line_01
+    language: en
+    layout: single_line
+    psm: 7
+    text: "The quick brown fox jumps over the lazy dog"
+  - id: en_line_02
+    language: en
+    layout: single_line
+    psm: 7
+    text: "Pack my box with five dozen liquor jugs"
+  - id: en_line_03
+    language: en
+    layout: single_line
+    psm: 7
+    text: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  - id: en_line_04
+    language: en
+    layout: single_line
+    psm: 7
+    text: "abcdefghijklmnopqrstuvwxyz"
+  - id: en_line_05
+    language: en
+    layout: single_line
+    psm: 7
+    text: "AbCdEfGhIjKlMnOpQrStUvWxYz"
+  - id: en_line_06
+    language: en
+    layout: single_line
+    psm: 7
+    text: "Hello World Test"
+  - id: en_line_07
+    language: en
+    layout: single_line
+    psm: 7
+    text: "abc123XYZ"
+  - id: en_line_08
+    language: en
+    layout: single_line
+    psm: 7
+    text: "ab test"
+  - id: en_line_09
+    language: en
+    layout: single_line
+    psm: 7
+    text: "Sphinx of black quartz judge my vow"
+  - id: en_line_10
+    language: en
+    layout: single_line
+    psm: 7
+    text: "The five boxing wizards jump quickly"
+  - id: en_line_11
+    language: en
+    layout: single_line
+    psm: 7
+    text: "How vexingly quick daft zebras jump"
+  - id: en_line_12
+    language: en
+    layout: single_line
+    psm: 7
+    text: "Pangram Quick Fox"
+  - id: en_line_13
+    language: en
+    layout: single_line
+    psm: 7
+    text: "Test Sample Text"
+  - id: en_line_14
+    language: en
+    layout: single_line
+    psm: 7
+    text: "Naive Bilinear Lanczos"
+  - id: en_line_15
+    language: en
+    layout: single_line
+    psm: 7
+    text: "Character Error Rate"
+  - id: zh_char_01
+    language: zh_tra
+    layout: single_char
+    psm: 10
+    text: "做"
+  - id: zh_char_02
+    language: zh_tra
+    layout: single_char
+    psm: 10
+    text: "剪"
+  - id: zh_line_01
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "做假停偷側推售問"
+  - id: zh_line_02
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "唸唾啃啄執"
+  - id: zh_line_03
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "得深常奢夠堅堂基培堵"
+  - id: zh_line_04
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "乾彩商域國匙剪區參"
+  - id: zh_line_05
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "天地玄黃宇宙洪荒"
+  - id: zh_line_06
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "日月盈昃辰宿列張"
+  - id: zh_line_07
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "昔我往矣楊柳依依"
+  - id: zh_line_08
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "今我來思雨雪霏霏"
+  - id: zh_line_09
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "測試文字"
+  - id: zh_line_10
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "1234567890"
