@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -20,6 +21,10 @@ TAP_OFFSETS = np.arange(-3, 4, dtype=np.int64)
 PHASES = 16
 Q_FRACTION_BITS = 14
 Q_SCALE = 1 << Q_FRACTION_BITS
+REFERENCE_TAPS = 129
+REFERENCE_PHASES = 1024
+REFERENCE_LOBES = 3
+REFERENCE_TAP_OFFSETS = np.arange(-64, 65, dtype=np.int64)
 
 
 @dataclass(frozen=True)
@@ -95,15 +100,31 @@ def coefficient_bank(scale: float, lobes: int) -> np.ndarray:
     return bank
 
 
-def _coordinate(destination: int, actual_scale: float) -> tuple[int, int]:
+def _coordinate_for_phases(
+    destination: int, actual_scale: float, phases: int
+) -> tuple[int, int]:
     coordinate = (destination + 0.5) * actual_scale - 0.5
     base = math.floor(coordinate)
     fraction = coordinate - base
-    phase = int(math.floor(fraction * PHASES + 0.5))
-    if phase == PHASES:
+    phase = int(math.floor(fraction * phases + 0.5))
+    if phase == phases:
         base += 1
         phase = 0
     return base, phase
+
+
+def _coordinate(destination: int, actual_scale: float) -> tuple[int, int]:
+    return _coordinate_for_phases(destination, actual_scale, PHASES)
+
+
+def _reflect101_indices(indices: np.ndarray, length: int) -> np.ndarray:
+    if length < 1:
+        raise ValueError("sampled image dimension must be positive")
+    if length == 1:
+        return np.zeros_like(indices)
+    period = 2 * length - 2
+    reflected = np.mod(indices, period)
+    return np.where(reflected < length, reflected, period - reflected)
 
 
 def _round_shift_signed(values: np.ndarray, bits: int) -> np.ndarray:
@@ -112,9 +133,17 @@ def _round_shift_signed(values: np.ndarray, bits: int) -> np.ndarray:
     return np.where(values >= 0, (values + half) // scale, -((-values + half) // scale))
 
 
-def lanczos_resize(image: np.ndarray, ratio: float, lobes: int) -> ResizeResult:
+def lanczos_resize(
+    image: np.ndarray,
+    ratio: float,
+    lobes: int,
+    *,
+    boundary: str = "white",
+) -> ResizeResult:
     if image.ndim != 2 or image.dtype != np.uint8:
         raise ValueError("lanczos_resize expects a 2D uint8 image")
+    if boundary not in {"white", "reflect101"}:
+        raise ValueError(f"unknown Lanczos boundary mode: {boundary}")
     source_height, source_width = image.shape
     destination_width = output_length(source_width, ratio)
     destination_height = output_length(source_height, ratio)
@@ -132,10 +161,13 @@ def lanczos_resize(image: np.ndarray, ratio: float, lobes: int) -> ResizeResult:
         base, phase = _coordinate(destination_x, scale_x)
         coefficients = bank_x[phase].astype(np.int64)
         indices = base + TAP_OFFSETS
-        samples = np.full((source_height, len(TAP_OFFSETS)), 255, dtype=np.int64)
-        valid = (indices >= 0) & (indices < source_width)
-        if valid.any():
-            samples[:, valid] = source[:, indices[valid]]
+        if boundary == "reflect101":
+            samples = source[:, _reflect101_indices(indices, source_width)]
+        else:
+            samples = np.full((source_height, len(TAP_OFFSETS)), 255, dtype=np.int64)
+            valid = (indices >= 0) & (indices < source_width)
+            if valid.any():
+                samples[:, valid] = source[:, indices[valid]]
         horizontal[:, destination_x] = (samples * coefficients).sum(axis=1, dtype=np.int64)
 
     vertical = np.empty((destination_height, destination_width), dtype=np.int64)
@@ -143,12 +175,15 @@ def lanczos_resize(image: np.ndarray, ratio: float, lobes: int) -> ResizeResult:
         base, phase = _coordinate(destination_y, scale_y)
         coefficients = bank_y[phase].astype(np.int64)
         indices = base + TAP_OFFSETS
-        samples = np.full(
-            (len(TAP_OFFSETS), destination_width), white_q14, dtype=np.int64
-        )
-        valid = (indices >= 0) & (indices < source_height)
-        if valid.any():
-            samples[valid, :] = horizontal[indices[valid], :]
+        if boundary == "reflect101":
+            samples = horizontal[_reflect101_indices(indices, source_height), :]
+        else:
+            samples = np.full(
+                (len(TAP_OFFSETS), destination_width), white_q14, dtype=np.int64
+            )
+            valid = (indices >= 0) & (indices < source_height)
+            if valid.any():
+                samples[valid, :] = horizontal[indices[valid], :]
         vertical[destination_y, :] = (samples * coefficients[:, None]).sum(
             axis=0, dtype=np.int64
         )
@@ -164,6 +199,7 @@ def lanczos_resize(image: np.ndarray, ratio: float, lobes: int) -> ResizeResult:
             "tap_offsets": TAP_OFFSETS.tolist(),
             "q_format": "Q2.14",
             "q_fraction_bits": Q_FRACTION_BITS,
+            "boundary": boundary,
             "actual_scale_x": scale_x,
             "actual_scale_y": scale_y,
             "coefficient_bank_x": bank_x.astype(int).tolist(),
@@ -198,7 +234,109 @@ def opencv_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
     )
 
 
-def resize_image(image: np.ndarray, requested_ratio: float, method: str) -> ResizeResult:
+@lru_cache(maxsize=64)
+def reference_coefficient_bank(scale: float) -> np.ndarray:
+    """Build a float64 129-slot/1024-phase scale-aware Lanczos-3 bank."""
+
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    cutoff = min(1.0, 1.0 / scale)
+    support = REFERENCE_LOBES / cutoff
+    if support > float(REFERENCE_TAP_OFFSETS[-1]):
+        raise ValueError(
+            f"Lanczos-{REFERENCE_LOBES} support {support:.6f} exceeds the "
+            f"{REFERENCE_TAPS}-tap reference capacity"
+        )
+
+    bank = np.zeros((REFERENCE_PHASES, REFERENCE_TAPS), dtype=np.float64)
+    offsets = REFERENCE_TAP_OFFSETS.astype(np.float64)
+    for phase in range(REFERENCE_PHASES):
+        fraction = phase / REFERENCE_PHASES
+        distance = offsets - fraction
+        scaled_distance = cutoff * distance
+        inside = np.abs(scaled_distance) < REFERENCE_LOBES
+        values = np.zeros(REFERENCE_TAPS, dtype=np.float64)
+        values[inside] = (
+            cutoff
+            * np.sinc(scaled_distance[inside])
+            * np.sinc(scaled_distance[inside] / REFERENCE_LOBES)
+        )
+        total = float(values.sum())
+        if abs(total) < 1e-15:
+            raise RuntimeError("reference Lanczos coefficient phase has zero gain")
+        bank[phase] = values / total
+    bank.setflags(write=False)
+    return bank
+
+
+def reference_lanczos_resize(image: np.ndarray, ratio: float) -> ResizeResult:
+    if image.ndim != 2 or image.dtype != np.uint8:
+        raise ValueError("reference_lanczos_resize expects a 2D uint8 image")
+    source_height, source_width = image.shape
+    destination_width = output_length(source_width, ratio)
+    destination_height = output_length(source_height, ratio)
+    scale_x = source_width / destination_width
+    scale_y = source_height / destination_height
+    bank_x = reference_coefficient_bank(scale_x)
+    bank_y = reference_coefficient_bank(scale_y)
+    source = image.astype(np.float64)
+
+    horizontal = np.empty((source_height, destination_width), dtype=np.float64)
+    for destination_x in range(destination_width):
+        base, phase = _coordinate_for_phases(
+            destination_x, scale_x, REFERENCE_PHASES
+        )
+        coefficients = bank_x[phase]
+        active = np.flatnonzero(coefficients)
+        indices = _reflect101_indices(
+            base + REFERENCE_TAP_OFFSETS[active], source_width
+        )
+        horizontal[:, destination_x] = (
+            source[:, indices] * coefficients[active][None, :]
+        ).sum(axis=1, dtype=np.float64)
+
+    vertical = np.empty((destination_height, destination_width), dtype=np.float64)
+    for destination_y in range(destination_height):
+        base, phase = _coordinate_for_phases(
+            destination_y, scale_y, REFERENCE_PHASES
+        )
+        coefficients = bank_y[phase]
+        active = np.flatnonzero(coefficients)
+        indices = _reflect101_indices(
+            base + REFERENCE_TAP_OFFSETS[active], source_height
+        )
+        vertical[destination_y, :] = (
+            horizontal[indices, :] * coefficients[active][:, None]
+        ).sum(axis=0, dtype=np.float64)
+
+    pixels = np.clip(np.floor(vertical + 0.5), 0, 255).astype(np.uint8)
+    return ResizeResult(
+        pixels=pixels,
+        metadata={
+            "lobes": REFERENCE_LOBES,
+            "taps": REFERENCE_TAPS,
+            "phases": REFERENCE_PHASES,
+            "tap_offsets": [
+                int(REFERENCE_TAP_OFFSETS[0]), int(REFERENCE_TAP_OFFSETS[-1])
+            ],
+            "coefficient_precision": "float64",
+            "boundary": "reflect101",
+            "color_domain": "encoded_samples",
+            "coordinate_mapping": "half_pixel_centers",
+            "pixel_rounding": "round_half_up_then_clip_uint8",
+            "actual_scale_x": scale_x,
+            "actual_scale_y": scale_y,
+        },
+    )
+
+
+def resize_image(
+    image: np.ndarray,
+    requested_ratio: float,
+    method: str,
+    *,
+    boundary: str = "white",
+) -> ResizeResult:
     if method == "bin_floor":
         factor = integer_factor(requested_ratio, "floor")
         pixels = box_bin(image, factor)
@@ -226,7 +364,7 @@ def resize_image(image: np.ndarray, requested_ratio: float, method: str) -> Resi
     if method == "opencv_bilinear":
         return opencv_bilinear(image, requested_ratio)
     if method == "lanczos2_7tap_16phase":
-        return lanczos_resize(image, requested_ratio, lobes=2)
+        return lanczos_resize(image, requested_ratio, lobes=2, boundary=boundary)
     if method == "lanczos3_7tap_16phase":
-        return lanczos_resize(image, requested_ratio, lobes=3)
+        return lanczos_resize(image, requested_ratio, lobes=3, boundary=boundary)
     raise ValueError(f"unknown resize method: {method}")

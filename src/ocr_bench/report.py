@@ -20,6 +20,7 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import BenchmarkConfig, ratio_slug
+from .ranking import select_method_ratio_extremes
 from .resample import METHODS
 
 
@@ -455,6 +456,35 @@ def _write_performance_summary(results: pd.DataFrame, output: Path) -> list[Path
                         "tie_count": tie_count,
                     }
                 )
+
+        non_binning = select_method_ratio_extremes(scoped)
+        for rank in ("best", "worst"):
+            condition = non_binning[rank]
+            text_lines.append(
+                f"- {rank.title()} non-binning method×ratio condition: "
+                f"{_method_name(condition.method)} at "
+                f"{condition.requested_ratio:.3f}× "
+                f"({100 * condition.cer:.2f}% CER"
+                f"{f', {condition.tie_count} tied' if condition.tie_count > 1 else ''})"
+            )
+            structured.append(
+                {
+                    "scope": scope_id,
+                    "category": "non_binning_method_by_ratio",
+                    "rank": rank,
+                    "method": condition.method,
+                    "requested_ratio": condition.requested_ratio,
+                    "pattern_id": "",
+                    "language": "",
+                    "psm": "",
+                    "cer": condition.cer,
+                    "edit_distance": condition.edit_distance,
+                    "reference_chars": condition.reference_chars,
+                    "reference": "",
+                    "prediction": "",
+                    "tie_count": condition.tie_count,
+                }
+            )
 
         for rank, best in (("best", True), ("worst", False)):
             row, tie_count = _extreme_row(scoped, best)
