@@ -215,6 +215,10 @@ def opencv_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
         raise RuntimeError(
             "OpenCV is required for opencv_bilinear; install the project dependencies"
         ) from error
+    cv2.setUseOptimized(False)
+    cv2.setNumThreads(1)
+    if hasattr(cv2, "ocl"):
+        cv2.ocl.setUseOpenCL(False)
     source_height, source_width = image.shape
     destination_width = output_length(source_width, ratio)
     destination_height = output_length(source_height, ratio)
@@ -228,6 +232,9 @@ def opencv_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
         metadata={
             "interpolation": "cv2.INTER_LINEAR",
             "neighborhood": "2x2",
+            "optimized": False,
+            "threads": 1,
+            "opencl": False,
             "actual_scale_x": source_width / destination_width,
             "actual_scale_y": source_height / destination_height,
         },
