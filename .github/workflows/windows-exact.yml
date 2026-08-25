@@ -110,6 +110,7 @@ jobs:
               lines.append(f"{run} Traditional Chinese bilinear pooled CER: {cer:.17g}")
 
           source_diffs = []
+          source_diff_count = 0
           if (baseline / "source_manifest.json").is_file() and (candidate / "source_manifest.json").is_file():
               left = json.loads((baseline / "source_manifest.json").read_text(encoding="utf-8"))
               right = json.loads((candidate / "source_manifest.json").read_text(encoding="utf-8"))
@@ -121,11 +122,15 @@ jobs:
                   left_pixels = np.asarray(Image.open(baseline / rel).convert("L"), dtype=np.uint8)
                   right_pixels = np.asarray(Image.open(candidate / rel).convert("L"), dtype=np.uint8)
                   if pixel_sha256(left_pixels) != pixel_sha256(right_pixels):
-                      source_diffs.append(rel)
+                      source_diff_count += 1
                       if len(source_diffs) >= 10:
-                          break
+                          continue
+                      source_diffs.append(rel)
 
-          output_diffs = []
+          pixel_diffs = []
+          prediction_diffs = []
+          pixel_diff_count = 0
+          prediction_diff_count = 0
           baseline_rows = {}
           with (baseline / "image_results.csv").open("r", encoding="utf-8", newline="") as handle:
               for row in csv.DictReader(handle):
@@ -141,26 +146,43 @@ jobs:
                   new_pixels = np.asarray(Image.open(candidate / row["output_path"]).convert("L"), dtype=np.uint8)
                   prediction_changed = old["prediction"] != row["prediction"]
                   pixels_changed = pixel_sha256(old_pixels) != pixel_sha256(new_pixels)
-                  if prediction_changed or pixels_changed:
-                      output_diffs.append(
-                          {
-                              "pattern_id": row["pattern_id"],
-                              "ratio": row["requested_ratio"],
-                              "pixels_changed": pixels_changed,
-                              "prediction_changed": prediction_changed,
-                              "old_prediction": old["prediction"].replace("\n", "\\n"),
-                              "new_prediction": row["prediction"].replace("\n", "\\n"),
-                          }
-                      )
-                      if len(output_diffs) >= 20:
-                          break
+                  if pixels_changed:
+                      pixel_diff_count += 1
+                      if len(pixel_diffs) < 20:
+                          pixel_diffs.append(
+                              {
+                                  "pattern_id": row["pattern_id"],
+                                  "ratio": row["requested_ratio"],
+                              }
+                          )
+                  if prediction_changed:
+                      prediction_diff_count += 1
+                      if len(prediction_diffs) < 20:
+                          prediction_diffs.append(
+                              {
+                                  "pattern_id": row["pattern_id"],
+                                  "ratio": row["requested_ratio"],
+                                  "old_prediction": old["prediction"].replace("\n", "\\n"),
+                                  "new_prediction": row["prediction"].replace("\n", "\\n"),
+                              }
+                          )
 
           lines.append("")
+          lines.append(f"Source pixel diff count: {source_diff_count}")
           lines.append(f"First source pixel diffs: {source_diffs or 'none'}")
-          lines.append("First output/prediction diffs:")
-          for diff in output_diffs:
+          lines.append("")
+          lines.append(f"Traditional Chinese bilinear output pixel diff count: {pixel_diff_count}")
+          lines.append("First output pixel diffs:")
+          for diff in pixel_diffs:
               lines.append(json.dumps(diff, ensure_ascii=True, sort_keys=True))
-          if not output_diffs:
+          if not pixel_diffs:
+              lines.append("none")
+          lines.append("")
+          lines.append(f"Traditional Chinese bilinear prediction diff count: {prediction_diff_count}")
+          lines.append("First prediction diffs:")
+          for diff in prediction_diffs:
+              lines.append(json.dumps(diff, ensure_ascii=True, sort_keys=True))
+          if not prediction_diffs:
               lines.append("none")
 
           report.write_text("\n".join(lines) + "\n", encoding="utf-8")
