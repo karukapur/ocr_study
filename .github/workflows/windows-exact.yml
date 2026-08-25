@@ -13,6 +13,8 @@ permissions:
 env:
   PYTHON_VERSION: "3.12"
   TESSERACT_VERSION: "5.5.1"
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
   EXPECTED_ENG_TRAINEDDATA_SHA256: "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
   EXPECTED_CHI_TRA_TRAINEDDATA_SHA256: "529c5b5797d64b126065cd55f2bb4c7fd7b15790798091b1ff259941a829330b"
   EXPECTED_ZH_BILINEAR_CER: "0.19117647058823528"
@@ -157,7 +159,7 @@ jobs:
           lines.append(f"First source pixel diffs: {source_diffs or 'none'}")
           lines.append("First output/prediction diffs:")
           for diff in output_diffs:
-              lines.append(json.dumps(diff, ensure_ascii=False, sort_keys=True))
+              lines.append(json.dumps(diff, ensure_ascii=True, sort_keys=True))
           if not output_diffs:
               lines.append("none")
 
