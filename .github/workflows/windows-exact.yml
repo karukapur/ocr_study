@@ -21,6 +21,9 @@ jobs:
   windows-exact:
     name: Windows exact run
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash -el {0}
 
     steps:
       - name: Check out repository
@@ -30,25 +33,26 @@ jobs:
         uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: latest
+          activate-environment: ocr-bench
+          python-version: ${{ env.PYTHON_VERSION }}
           channels: conda-forge
           channel-priority: strict
-          auto-activate-base: false
           conda-remove-defaults: true
 
-      - name: Create benchmark environment
+      - name: Install Tesseract 5.5.1
         run: |
-          conda create -y -n ocr-bench -c conda-forge python=${{ env.PYTHON_VERSION }} tesseract=${{ env.TESSERACT_VERSION }}
-          conda run -n ocr-bench tesseract --version
-          conda run -n ocr-bench python --version
+          conda install -y -c conda-forge "tesseract=${TESSERACT_VERSION}"
+          tesseract --version
+          python --version
 
       - name: Install Python dependencies
         run: |
-          conda run -n ocr-bench python -m pip install --upgrade pip
-          conda run -n ocr-bench python -m pip install -e ".[dev]"
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
 
       - name: Verify font and tessdata hashes
         run: |
-          conda run -n ocr-bench python - <<'PY'
+          python - <<'PY'
           from pathlib import Path
           from ocr_bench.util import sha256_file
           import os
@@ -67,17 +71,17 @@ jobs:
           PY
 
       - name: Run unit tests
-        run: conda run -n ocr-bench python -m pytest
+        run: python -m pytest
 
       - name: Run exact benchmark
         run: |
-          conda run -n ocr-bench python -m ocr_bench all --exact --force \
+          python -m ocr_bench all --exact --force \
             --config benchmark.yaml \
             --output artifacts/run-exact-windows
 
       - name: Diagnose Windows differences from run-001
         run: |
-          conda run -n ocr-bench python - <<'PY'
+          python - <<'PY'
           from pathlib import Path
           import csv
           import json
@@ -162,7 +166,7 @@ jobs:
 
       - name: Assert Traditional Chinese bilinear CER
         run: |
-          conda run -n ocr-bench python - <<'PY'
+          python - <<'PY'
           from pathlib import Path
           import math
           import os
@@ -183,7 +187,7 @@ jobs:
 
       - name: Compare against run-001 when config matches
         run: |
-          conda run -n ocr-bench python - <<'PY'
+          python - <<'PY'
           from pathlib import Path
           from ocr_bench.util import read_json, sha256_file
           import subprocess
