@@ -42,6 +42,11 @@ def _parser() -> argparse.ArgumentParser:
         help="with --exact, replace OpenCV bilinear with the deterministic fixed-point bilinear kernel",
     )
     parser.add_argument(
+        "--baseline-run",
+        type=Path,
+        help="with --exact --deterministic-resize, reuse matching frozen resized pixels from this run",
+    )
+    parser.add_argument(
         "--natural-input",
         type=Path,
         help="natural-photo input directory for export-comparison",
@@ -73,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"{args.command} requires --config and --output")
         if (args.deterministic_renderer or args.deterministic_resize) and not args.exact:
             raise ValueError("--deterministic-renderer and --deterministic-resize require --exact")
+        if args.baseline_run is not None and not (args.exact and args.deterministic_resize):
+            raise ValueError("--baseline-run requires --exact --deterministic-resize")
         config = load_config(args.config)
         output = args.output.resolve()
         forbidden_outputs = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
@@ -98,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
                 exact=args.exact,
                 deterministic_resize=args.deterministic_resize,
+                baseline_run=args.baseline_run,
             )
             print(f"Evaluated {manifest['result_count']} resized images")
         if args.command in {"report", "all"}:

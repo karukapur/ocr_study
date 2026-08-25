@@ -78,9 +78,10 @@ jobs:
 
       - name: Run exact benchmark
         run: |
-          python -m ocr_bench all --exact --force \
+          python -m ocr_bench all --exact --deterministic-resize --force \
             --config benchmark.yaml \
-            --output artifacts/run-exact-windows
+            --output artifacts/run-exact-windows \
+            --baseline-run artifacts/run-001
 
       - name: Diagnose Windows differences from run-001
         run: |

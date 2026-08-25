@@ -86,7 +86,8 @@ def test_fixed_point_bilinear_is_deterministic_for_known_array() -> None:
     result = fixed_point_bilinear(image, 2.0)
     expected = np.array([[40, 72], [168, 200]], dtype=np.uint8)
     np.testing.assert_array_equal(result.pixels, expected)
-    assert result.metadata["interpolation"] == "fixed_point_bilinear"
+    assert result.metadata["interpolation"] == "cv2.INTER_LINEAR deterministic clone"
+    assert result.metadata["kernel"] == "opencv_inter_area_fast_2x"
 
 
 def test_integer_floor_and_ceil_are_identical() -> None:

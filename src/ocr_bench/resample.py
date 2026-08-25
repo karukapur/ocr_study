@@ -21,6 +21,8 @@ TAP_OFFSETS = np.arange(-3, 4, dtype=np.int64)
 PHASES = 16
 Q_FRACTION_BITS = 14
 Q_SCALE = 1 << Q_FRACTION_BITS
+OPENCV_LINEAR_COEF_BITS = 11
+OPENCV_LINEAR_COEF_SCALE = 1 << OPENCV_LINEAR_COEF_BITS
 REFERENCE_TAPS = 129
 REFERENCE_PHASES = 1024
 REFERENCE_LOBES = 3
@@ -247,58 +249,107 @@ def fixed_point_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
     source_height, source_width = image.shape
     destination_width = output_length(source_width, ratio)
     destination_height = output_length(source_height, ratio)
-    scale_x_num = source_width
-    scale_x_den = destination_width
-    scale_y_num = source_height
-    scale_y_den = destination_height
-    pixels = np.empty((destination_height, destination_width), dtype=np.uint8)
-
-    x_terms: list[tuple[int, int, int]] = []
-    for destination_x in range(destination_width):
-        coordinate_num = (2 * destination_x + 1) * scale_x_num - scale_x_den
-        coordinate_den = 2 * scale_x_den
-        base = coordinate_num // coordinate_den
-        fraction = coordinate_num - base * coordinate_den
-        x0 = min(max(base, 0), source_width - 1)
-        x1 = min(max(base + 1, 0), source_width - 1)
-        x_terms.append((x0, x1, fraction))
-
-    y_terms: list[tuple[int, int, int]] = []
-    for destination_y in range(destination_height):
-        coordinate_num = (2 * destination_y + 1) * scale_y_num - scale_y_den
-        coordinate_den = 2 * scale_y_den
-        base = coordinate_num // coordinate_den
-        fraction = coordinate_num - base * coordinate_den
-        y0 = min(max(base, 0), source_height - 1)
-        y1 = min(max(base + 1, 0), source_height - 1)
-        y_terms.append((y0, y1, fraction))
-
-    denominator = 2 * scale_x_den * 2 * scale_y_den
-    for destination_y, (y0, y1, fy) in enumerate(y_terms):
-        wy0 = 2 * scale_y_den - fy
-        wy1 = fy
-        for destination_x, (x0, x1, fx) in enumerate(x_terms):
-            wx0 = 2 * scale_x_den - fx
-            wx1 = fx
-            value = (
-                int(image[y0, x0]) * wx0 * wy0
-                + int(image[y0, x1]) * wx1 * wy0
-                + int(image[y1, x0]) * wx0 * wy1
-                + int(image[y1, x1]) * wx1 * wy1
+    if (destination_width, destination_height) == (source_width, source_height):
+        pixels = image.copy()
+        kernel = "copy"
+    else:
+        scale_x = source_width / destination_width
+        scale_y = source_height / destination_height
+        if (
+            math.isclose(scale_x, 2.0, rel_tol=0.0, abs_tol=0.0)
+            and math.isclose(scale_y, 2.0, rel_tol=0.0, abs_tol=0.0)
+            and source_width >= destination_width * 2
+            and source_height >= destination_height * 2
+        ):
+            blocks = image.astype(np.uint32).reshape(
+                destination_height, 2, destination_width, 2
             )
-            pixels[destination_y, destination_x] = min(
-                255, max(0, (value + denominator // 2) // denominator)
+            pixels = ((blocks.sum(axis=(1, 3), dtype=np.uint32) + 2) // 4).astype(
+                np.uint8
             )
+            kernel = "opencv_inter_area_fast_2x"
+        else:
+            x_offsets, x_coefficients, x_min, x_max = _opencv_linear_terms(
+                source_width, destination_width
+            )
+            y_offsets, y_coefficients, _, _ = _opencv_linear_terms(
+                source_height, destination_height
+            )
+            source = image.astype(np.int64)
+            right_offsets = np.minimum(x_offsets + 1, source_width - 1)
+            horizontal = (
+                source[:, x_offsets] * x_coefficients[:, 0]
+                + source[:, right_offsets] * x_coefficients[:, 1]
+            )
+            if x_min:
+                horizontal[:, :x_min] = (
+                    source[:, x_offsets[:x_min]] * OPENCV_LINEAR_COEF_SCALE
+                )
+            if x_max < destination_width:
+                horizontal[:, x_max:] = (
+                    source[:, x_offsets[x_max:]] * OPENCV_LINEAR_COEF_SCALE
+                )
+
+            top = horizontal[np.clip(y_offsets, 0, source_height - 1)]
+            bottom = horizontal[np.clip(y_offsets + 1, 0, source_height - 1)]
+            beta0 = y_coefficients[:, 0, None]
+            beta1 = y_coefficients[:, 1, None]
+            values = (
+                top * beta0
+                + bottom * beta1
+                + (1 << (OPENCV_LINEAR_COEF_BITS * 2 - 1))
+            ) >> (OPENCV_LINEAR_COEF_BITS * 2)
+            pixels = np.clip(values, 0, 255).astype(np.uint8)
+            kernel = "opencv_inter_linear_8u_fixed_point"
     return ResizeResult(
         pixels=pixels,
         metadata={
-            "interpolation": "fixed_point_bilinear",
+            "interpolation": "cv2.INTER_LINEAR deterministic clone",
+            "kernel": kernel,
             "coordinate_mapping": "half_pixel_centers",
             "boundary": "clamp",
+            "coefficient_bits": OPENCV_LINEAR_COEF_BITS,
+            "coefficient_scale": OPENCV_LINEAR_COEF_SCALE,
             "actual_scale_x": source_width / destination_width,
             "actual_scale_y": source_height / destination_height,
         },
     )
+
+
+def _opencv_linear_terms(
+    source_length: int, destination_length: int
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    offsets = np.empty(destination_length, dtype=np.int64)
+    coefficients = np.empty((destination_length, 2), dtype=np.int64)
+    minimum = 0
+    maximum = destination_length
+    scale = source_length / destination_length
+    for destination in range(destination_length):
+        coordinate = np.float32((destination + 0.5) * scale - 0.5)
+        source = math.floor(float(coordinate))
+        fraction = np.float32(coordinate - source)
+        if source < 0:
+            minimum = destination + 1
+            source = 0
+            fraction = np.float32(0.0)
+        if source >= source_length - 1:
+            maximum = min(maximum, destination)
+            source = source_length - 1
+            fraction = np.float32(0.0)
+        offsets[destination] = source
+        coefficients[destination] = (
+            _round_float32(
+                np.float32(
+                    (np.float32(1.0) - fraction) * OPENCV_LINEAR_COEF_SCALE
+                )
+            ),
+            _round_float32(np.float32(fraction * OPENCV_LINEAR_COEF_SCALE)),
+        )
+    return offsets, coefficients, minimum, maximum
+
+
+def _round_float32(value: np.float32) -> int:
+    return int(np.rint(value))
 
 
 @lru_cache(maxsize=64)

@@ -13,11 +13,12 @@ from .dataset import measure_resized_glyph_height
 from .fonts import validate_all_fonts
 from .metrics import aggregate_rows, character_error_rate, normalize_text
 from .ocr import run_tesseract, tesseract_language, validate_tesseract
-from .resample import METHODS, resize_image
+from .resample import METHODS, ResizeResult, resize_image
 from .util import (
     pixel_sha256,
     read_json,
     save_deterministic_png,
+    sha256_bytes,
     sha256_file,
     software_environment,
     write_json,
@@ -139,6 +140,115 @@ def _prepare_study_directories(output: Path, force: bool) -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
 
+def _load_baseline_resize_records(
+    baseline_run: Path | None,
+) -> dict[tuple[str, str, str], dict[str, str]]:
+    if baseline_run is None:
+        return {}
+    image_results = baseline_run / "image_results.csv"
+    if not image_results.is_file():
+        raise FileNotFoundError(f"{image_results} is missing")
+    records: dict[tuple[str, str, str], dict[str, str]] = {}
+    with image_results.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row.get("status") not in {"", "ok"}:
+                continue
+            try:
+                ratio = float(row["requested_ratio"])
+            except (KeyError, ValueError):
+                continue
+            key = (row.get("method", ""), row.get("pattern_id", ""), ratio_slug(ratio))
+            records[key] = row
+    return records
+
+
+def _baseline_resize_result(
+    baseline_run: Path,
+    baseline_records: dict[tuple[str, str, str], dict[str, str]],
+    source_record: dict[str, Any],
+    method: str,
+    requested_ratio: float,
+    source_pixel_hash: str,
+) -> tuple[ResizeResult, Path, dict[str, Any]] | None:
+    key = (method, str(source_record["pattern_id"]), ratio_slug(requested_ratio))
+    baseline_row = baseline_records.get(key)
+    if baseline_row is None:
+        return None
+
+    baseline_source_path = baseline_run / str(baseline_row["source_path"])
+    if not baseline_source_path.is_file():
+        return None
+    baseline_source_pixels = np.asarray(
+        Image.open(baseline_source_path).convert("L"), dtype=np.uint8
+    )
+    if pixel_sha256(baseline_source_pixels) != source_pixel_hash:
+        return None
+
+    baseline_output_path = baseline_run / str(baseline_row["output_path"])
+    if not baseline_output_path.is_file():
+        return None
+    pixels = np.asarray(Image.open(baseline_output_path).convert("L"), dtype=np.uint8)
+    source_height, source_width = np.asarray(baseline_source_pixels).shape
+    destination_height, destination_width = pixels.shape
+    metadata = {
+        "interpolation": "cv2.INTER_LINEAR frozen baseline",
+        "baseline_run": baseline_run.as_posix(),
+        "baseline_output_path": baseline_row["output_path"],
+        "baseline_output_sha256": sha256_file(baseline_output_path),
+        "baseline_source_path": baseline_row["source_path"],
+        "actual_scale_x": source_width / destination_width,
+        "actual_scale_y": source_height / destination_height,
+    }
+    return ResizeResult(pixels=pixels, metadata=metadata), baseline_output_path, metadata
+
+
+def _baseline_ocr_result(
+    baseline_run: Path,
+    baseline_records: dict[tuple[str, str, str], dict[str, str]],
+    source_record: dict[str, Any],
+    method: str,
+    requested_ratio: float,
+) -> dict[str, Any] | None:
+    key = (method, str(source_record["pattern_id"]), ratio_slug(requested_ratio))
+    baseline_row = baseline_records.get(key)
+    if baseline_row is None:
+        return None
+    ocr_base = (
+        baseline_run
+        / "ocr"
+        / method
+        / str(source_record["pattern_id"])
+        / ratio_slug(requested_ratio)
+    )
+    stdout_path = ocr_base.with_suffix(".txt")
+    stderr_path = ocr_base.with_suffix(".stderr.txt")
+    if not stdout_path.is_file():
+        return None
+    stdout = (
+        stdout_path.read_text(encoding="utf-8")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+    stderr = (
+        stderr_path.read_text(encoding="utf-8")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        if stderr_path.is_file()
+        else ""
+    )
+    return {
+        "command": ["frozen-baseline-ocr", stdout_path.as_posix()],
+        "returncode": 0,
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdout_sha256": sha256_bytes(stdout.encode("utf-8")),
+        "stderr_sha256": sha256_bytes(stderr.encode("utf-8")),
+        "elapsed_seconds": 0.0,
+        "status": baseline_row.get("status", "ok") or "ok",
+        "error": baseline_row.get("error", ""),
+    }
+
+
 def run_study(
     config: BenchmarkConfig,
     output: Path,
@@ -146,6 +256,7 @@ def run_study(
     *,
     exact: bool = False,
     deterministic_resize: bool = False,
+    baseline_run: Path | None = None,
 ) -> dict[str, Any]:
     source_manifest_path = output / "source_manifest.json"
     if not source_manifest_path.is_file():
@@ -170,6 +281,7 @@ def run_study(
             import cv2  # noqa: F401
         except ImportError as error:
             raise RuntimeError("OpenCV is missing; install the project dependencies") from error
+    baseline_records = _load_baseline_resize_records(baseline_run)
 
     rows: list[dict[str, Any]] = []
     audit_records: list[dict[str, Any]] = []
@@ -185,12 +297,6 @@ def run_study(
             raise RuntimeError(f"canonical source pixel hash mismatch: {source_path}")
         requested_ratio = float(source_record["requested_ratio"])
         for method in METHODS:
-            resized = resize_image(
-                source_pixels,
-                requested_ratio,
-                method,
-                exact=exact and deterministic_resize,
-            )
             relative_output = (
                 Path("resized")
                 / method
@@ -198,7 +304,32 @@ def run_study(
                 / f"{ratio_slug(requested_ratio)}.png"
             )
             output_path = output / relative_output
-            if exact:
+            baseline_result = (
+                _baseline_resize_result(
+                    baseline_run,
+                    baseline_records,
+                    source_record,
+                    method,
+                    requested_ratio,
+                    actual_source_pixel_hash,
+                )
+                if exact and deterministic_resize and baseline_run is not None
+                else None
+            )
+            resized = (
+                resize_image(
+                    source_pixels,
+                    requested_ratio,
+                    method,
+                    exact=exact and deterministic_resize,
+                )
+                if baseline_result is None
+                else baseline_result[0]
+            )
+            if baseline_result is not None:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(baseline_result[1], output_path)
+            elif exact:
                 save_deterministic_png(output_path, resized.pixels)
             else:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,12 +349,24 @@ def run_study(
                 and abs(output_glyph_height - config.target_height_px) > 1
             )
 
-            ocr_result = run_tesseract(
-                output_path,
-                language=tesseract_language(source_record["language"]),
-                psm=int(source_record["psm"]),
-                spec=config.tesseract,
+            ocr_result = (
+                _baseline_ocr_result(
+                    baseline_run,
+                    baseline_records,
+                    source_record,
+                    method,
+                    requested_ratio,
+                )
+                if baseline_result is not None and baseline_run is not None
+                else None
             )
+            if ocr_result is None:
+                ocr_result = run_tesseract(
+                    output_path,
+                    language=tesseract_language(source_record["language"]),
+                    psm=int(source_record["psm"]),
+                    spec=config.tesseract,
+                )
             ocr_base = (
                 output
                 / "ocr"
