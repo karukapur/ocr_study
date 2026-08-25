@@ -39,6 +39,68 @@ The stages can also be run independently:
 Add `--force` to rebuild the files owned by a stage. Each run records source,
 font, tessdata, configuration, and output hashes in JSON manifests.
 
+## Reproducibility modes
+
+The default commands preserve the original Pillow/OpenCV pipeline used for
+`artifacts/run-001`, which is now the frozen manager-facing baseline. Use this
+mode when you need to reproduce or compare against those already-presented
+results:
+
+```bash
+.venv/bin/python -m ocr_bench all --config benchmark.yaml --output artifacts/run-new
+.venv/bin/python -m ocr_bench compare-runs artifacts/run-001 artifacts/run-new
+```
+
+For manager-baseline-compatible reproducibility accounting, use exact mode:
+
+```bash
+.venv/bin/python -m ocr_bench all --exact --config benchmark.yaml --output artifacts/run-exact
+```
+
+By default, exact mode preserves the original benchmark semantics: Pillow text
+rendering and OpenCV bilinear resizing remain active, so `run-001` results stay
+comparable. Exact mode adds stable grayscale PNG writing, raw pixel hashes,
+UTF-8/LF OCR text normalization, Tesseract `5.5.1` validation, and a separate
+audit manifest for timing/platform details.
+
+For future experiments that deliberately trade run-001 compatibility for a
+fully in-repo deterministic renderer or resize kernel, opt in explicitly:
+
+```bash
+.venv/bin/python -m ocr_bench all --exact \
+  --deterministic-renderer \
+  --deterministic-resize \
+  --config benchmark.yaml \
+  --output artifacts/run-deterministic
+```
+
+Changing ratios, target height, padding, fonts, or patterns is supported in
+both modes. The deterministic renderer/resizer path is the one intended for new
+cross-platform pixel regeneration; the default exact path is the one intended
+for reproducing the already-presented baseline.
+
+Install the pinned exact-mode Python stack with:
+
+```bash
+.venv/bin/pip install -r requirements-exact.txt
+.venv/bin/pip install --no-deps -e .
+```
+
+Exact mode requires Tesseract `5.5.1`. The local macOS/Homebrew binary and data
+hashes used while adding exact mode are:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `/opt/homebrew/bin/tesseract` | `6517c9cf1b17280201af3e48880517bbfafd24b5876aacb75d5643bafff1c414` |
+| `tessdata/eng.traineddata` | `7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2` |
+| `tessdata/chi_tra.traineddata` | `529c5b5797d64b126065cd55f2bb4c7fd7b15790798091b1ff259941a829330b` |
+| `fonts/Consolas-Regular.ttf` | `5f8d58e719a7d724be036145f506acf38b0942e253a7c331887c7056b93deac8` |
+| `fonts/microsoft-jhenghei.ttf` | `03a01753d6916c13bb2d2d159ba6f858949d191059b588f143fd589bf394d101` |
+
+Record the corresponding Windows and Linux Tesseract executable hashes from
+your installed native `5.5.1` binaries before treating those platforms as exact
+production baselines.
+
 ## Natural and Imatest comparison export
 
 After the study stage, natural photographs and Imatest-generated patterns can

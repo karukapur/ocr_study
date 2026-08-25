@@ -10,8 +10,13 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import BenchmarkConfig, FontSpec, Pattern, ratio_slug
+from .deterministic_text import (
+    DeterministicFont,
+    render_text as deterministic_render_text,
+    text_layout_bounds,
+)
 from .fonts import validate_all_fonts
-from .util import sha256_file, write_json
+from .util import pixel_sha256, save_deterministic_png, sha256_file, write_json
 
 
 def load_font(spec: FontSpec, size: int) -> ImageFont.FreeTypeFont:
@@ -77,8 +82,70 @@ def calibrate_font_size(
     return size, height
 
 
+def calibrate_deterministic_font_size(
+    spec: FontSpec,
+    text: str,
+    target_source_height: float,
+    threshold: int,
+    ignore_punctuation: bool = True,
+    maximum_size: int = 512,
+) -> tuple[int, int]:
+    best: tuple[float, int, int] | None = None
+    unique = sorted(
+        {
+            character
+            for character in text
+            if not character.isspace()
+            and not (ignore_punctuation and unicodedata.category(character).startswith("P"))
+        }
+    )
+    if not unique:
+        raise RuntimeError(f"could not render any visible glyphs from {spec.path}")
+    unit_font = DeterministicFont.load(spec, 1024)
+    unit_heights: list[float] = []
+    for character in unique:
+        contours = unit_font.contours(character)
+        if not contours:
+            continue
+        _, bottom, _, top, _ = text_layout_bounds(unit_font, [character], 0)
+        unit_heights.append((top - bottom) / (1024 * 4))
+    max_unit_height = max(unit_heights, default=0.0)
+    if max_unit_height <= 0:
+        raise RuntimeError(f"could not render any visible glyphs from {spec.path}")
+    estimate = max(1, min(maximum_size, int(round(target_source_height / max_unit_height))))
+    for size in range(max(1, estimate - 12), min(maximum_size, estimate + 12) + 1):
+        height = max(1, int(round(size * max_unit_height)))
+        candidate = (abs(height - target_source_height), size, height)
+        if height > 0 and (best is None or candidate[:2] < best[:2]):
+            best = candidate
+    if best is None:
+        raise RuntimeError(f"could not render any visible glyphs from {spec.path}")
+    _, size, height = best
+    return size, height
+
+
 def _ceil_multiple(value: int, multiple: int) -> int:
     return int(math.ceil(value / multiple) * multiple)
+
+
+def _portable_path(path: Path, base: Path) -> str:
+    try:
+        return path.relative_to(base).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _portable_font_info(font_info: dict[str, Any], base: Path) -> dict[str, Any]:
+    portable: dict[str, Any] = {}
+    for language, info in font_info.items():
+        if isinstance(info, dict):
+            item = dict(info)
+            if "path" in item:
+                item["path"] = _portable_path(Path(str(item["path"])), base)
+            portable[language] = item
+        else:
+            portable[language] = info
+    return portable
 
 
 def render_pattern(
@@ -191,6 +258,60 @@ def render_pattern(
     return image, metadata
 
 
+def render_pattern_deterministic(
+    pattern: Pattern,
+    spec: FontSpec,
+    ratio: float,
+    target_height: int,
+    threshold: int,
+    ignore_punctuation: bool,
+    padding_target: int,
+    line_spacing_target: int,
+    canvas_multiple: int,
+) -> tuple[Image.Image, dict[str, Any], np.ndarray]:
+    target_source_height = target_height * ratio
+    font_size, source_max_height = calibrate_deterministic_font_size(
+        spec, pattern.text, target_source_height, threshold, ignore_punctuation
+    )
+    padding = max(1, int(math.floor(padding_target * ratio + 0.5)))
+    spacing = max(0, int(math.floor(line_spacing_target * ratio + 0.5)))
+    font = DeterministicFont.load(spec, font_size)
+    pixels, render_metadata = deterministic_render_text(
+        font,
+        pattern.text,
+        padding_px=padding,
+        line_spacing_px=spacing,
+        canvas_multiple=canvas_multiple,
+    )
+    metadata = {
+        "pattern_id": pattern.id,
+        "language": pattern.language,
+        "layout": pattern.layout,
+        "psm": pattern.psm,
+        "reference": pattern.text,
+        "requested_ratio": ratio,
+        "target_output_glyph_height": target_height,
+        "target_source_glyph_height": target_source_height,
+        "font_size": font_size,
+        "source_max_glyph_height": source_max_height,
+        "source_height_error": source_max_height - target_source_height,
+        "ink_threshold": threshold,
+        "ignore_punctuation_in_glyph_height": ignore_punctuation,
+        "padding_source_px": padding,
+        "line_spacing_source_px": spacing,
+        "canvas_width": int(pixels.shape[1]),
+        "canvas_height": int(pixels.shape[0]),
+        "glyph_boxes": render_metadata["glyph_boxes"],
+        "renderer": {
+            "name": "ocr_bench_deterministic_text",
+            "font_engine": "fontTools glyf outlines",
+            "hinting": "disabled",
+            "supersample": render_metadata["supersample"],
+        },
+    }
+    return Image.fromarray(pixels, mode="L"), metadata, pixels
+
+
 def measure_resized_glyph_height(
     image: np.ndarray,
     source_width: int,
@@ -217,7 +338,14 @@ def measure_resized_glyph_height(
     return maximum
 
 
-def generate_sources(config: BenchmarkConfig, output: Path, force: bool = False) -> dict[str, Any]:
+def generate_sources(
+    config: BenchmarkConfig,
+    output: Path,
+    force: bool = False,
+    *,
+    exact: bool = False,
+    deterministic_renderer: bool = False,
+) -> dict[str, Any]:
     canonical = output / "canonical"
     if canonical.exists():
         if not force:
@@ -234,38 +362,67 @@ def generate_sources(config: BenchmarkConfig, output: Path, force: bool = False)
         pattern_dir = canonical / pattern.id
         pattern_dir.mkdir(parents=True, exist_ok=True)
         for ratio in config.ratios:
-            image, metadata = render_pattern(
-                pattern=pattern,
-                spec=spec,
-                ratio=ratio,
-                target_height=config.target_height_px,
-                threshold=config.ink_threshold,
-                ignore_punctuation=config.ignore_punctuation_in_glyph_height,
-                padding_target=config.padding_target_px,
-                line_spacing_target=config.line_spacing_target_px,
-                canvas_multiple=config.canvas_multiple,
-            )
+            if deterministic_renderer:
+                image, metadata, pixels = render_pattern_deterministic(
+                    pattern=pattern,
+                    spec=spec,
+                    ratio=ratio,
+                    target_height=config.target_height_px,
+                    threshold=config.ink_threshold,
+                    ignore_punctuation=config.ignore_punctuation_in_glyph_height,
+                    padding_target=config.padding_target_px,
+                    line_spacing_target=config.line_spacing_target_px,
+                    canvas_multiple=config.canvas_multiple,
+                )
+            else:
+                image, metadata = render_pattern(
+                    pattern=pattern,
+                    spec=spec,
+                    ratio=ratio,
+                    target_height=config.target_height_px,
+                    threshold=config.ink_threshold,
+                    ignore_punctuation=config.ignore_punctuation_in_glyph_height,
+                    padding_target=config.padding_target_px,
+                    line_spacing_target=config.line_spacing_target_px,
+                    canvas_multiple=config.canvas_multiple,
+                )
+                pixels = np.asarray(image, dtype=np.uint8)
             relative_path = Path("canonical") / pattern.id / f"{ratio_slug(ratio)}.png"
             image_path = output / relative_path
-            image.save(image_path, format="PNG", optimize=False)
-            records.append(
-                {
-                    **metadata,
-                    "font_path": str(spec.path),
-                    "font_index": spec.index,
-                    "image_path": relative_path.as_posix(),
-                    "sha256": sha256_file(image_path),
-                }
-            )
+            if exact:
+                save_deterministic_png(image_path, pixels)
+            else:
+                image.save(image_path, format="PNG", optimize=False)
+            record = {
+                **metadata,
+                "font_path": (
+                    _portable_path(spec.path, config.source_path.parent)
+                    if exact
+                    else str(spec.path)
+                ),
+                "font_index": spec.index,
+                "image_path": relative_path.as_posix(),
+                "sha256": sha256_file(image_path),
+            }
+            if exact:
+                record["pixel_sha256"] = pixel_sha256(pixels)
+            records.append(record)
 
     manifest = {
         "schema_version": 1,
-        "config_path": str(config.source_path),
+        "config_path": (
+            _portable_path(config.source_path, config.source_path.parent)
+            if exact
+            else str(config.source_path)
+        ),
         "config_sha256": sha256_file(config.source_path),
         "ratios": list(config.ratios),
-        "fonts": font_info,
+        "fonts": _portable_font_info(font_info, config.source_path.parent) if exact else font_info,
         "expected_source_count": len(config.patterns) * len(config.ratios),
         "sources": records,
     }
+    if exact:
+        manifest["exact_mode"] = True
+        manifest["deterministic_renderer"] = deterministic_renderer
     write_json(output / "source_manifest.json", manifest)
     return manifest

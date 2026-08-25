@@ -1,0 +1,148 @@
+name: Windows exact OCR reproducibility
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  TESSERACT_VERSION: "5.5.1"
+  EXPECTED_ENG_TRAINEDDATA_SHA256: "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+  EXPECTED_CHI_TRA_TRAINEDDATA_SHA256: "529c5b5797d64b126065cd55f2bb4c7fd7b15790798091b1ff259941a829330b"
+  EXPECTED_ZH_BILINEAR_CER: "0.19117647058823528"
+
+jobs:
+  windows-exact:
+    name: Windows exact run
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up conda-forge Python and Tesseract
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: ocr-bench
+          python-version: ${{ env.PYTHON_VERSION }}
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install Tesseract 5.5.1
+        run: |
+          conda install -y -c conda-forge "tesseract=${TESSERACT_VERSION}"
+          tesseract --version
+          python --version
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Verify font and tessdata hashes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from ocr_bench.util import sha256_file
+          import os
+
+          expected = {
+              Path("tessdata/eng.traineddata"): os.environ["EXPECTED_ENG_TRAINEDDATA_SHA256"],
+              Path("tessdata/chi_tra.traineddata"): os.environ["EXPECTED_CHI_TRA_TRAINEDDATA_SHA256"],
+              Path("fonts/Consolas-Regular.ttf"): "5f8d58e719a7d724be036145f506acf38b0942e253a7c331887c7056b93deac8",
+              Path("fonts/microsoft-jhenghei.ttf"): "03a01753d6916c13bb2d2d159ba6f858949d191059b588f143fd589bf394d101",
+          }
+          for path, wanted in expected.items():
+              actual = sha256_file(path)
+              print(f"{path}: {actual}")
+              if actual != wanted:
+                  raise SystemExit(f"{path} hash mismatch: expected {wanted}, got {actual}")
+          PY
+
+      - name: Run unit tests
+        run: python -m pytest
+
+      - name: Run exact benchmark
+        run: |
+          python -m ocr_bench all --exact --force \
+            --config benchmark.yaml \
+            --output artifacts/run-exact-windows
+
+      - name: Assert Traditional Chinese bilinear CER
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import math
+          import os
+          import pandas as pd
+
+          results = pd.read_csv(Path("artifacts/run-exact-windows/image_results.csv"))
+          subset = results[
+              (results["method"] == "opencv_bilinear")
+              & (results["language"] == "zh_tra")
+              & (results["status"] == "ok")
+          ]
+          cer = subset["edit_distance"].sum() / subset["reference_chars"].sum()
+          expected = float(os.environ["EXPECTED_ZH_BILINEAR_CER"])
+          print(f"Windows exact Traditional Chinese bilinear pooled CER: {cer:.17g}")
+          if not math.isclose(cer, expected, rel_tol=0.0, abs_tol=1e-15):
+              raise SystemExit(f"Expected CER {expected:.17g}, got {cer:.17g}")
+          PY
+
+      - name: Compare against run-001 when config matches
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from ocr_bench.util import read_json, sha256_file
+          import subprocess
+          import sys
+
+          baseline_manifest = Path("artifacts/run-001/source_manifest.json")
+          if not baseline_manifest.is_file():
+              print("artifacts/run-001/source_manifest.json is missing; skipping full compare-runs.")
+              raise SystemExit(0)
+
+          baseline_config_hash = read_json(baseline_manifest)["config_sha256"]
+          current_config_hash = sha256_file(Path("benchmark.yaml"))
+          if baseline_config_hash != current_config_hash:
+              print("benchmark.yaml does not match run-001's config hash; skipping full compare-runs.")
+              print(f"run-001 config:  {baseline_config_hash}")
+              print(f"current config:  {current_config_hash}")
+              raise SystemExit(0)
+
+          subprocess.run(
+              [
+                  sys.executable,
+                  "-m",
+                  "ocr_bench",
+                  "compare-runs",
+                  "artifacts/run-001",
+                  "artifacts/run-exact-windows",
+              ],
+              check=True,
+          )
+          PY
+
+      - name: Upload Windows exact artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exact-run
+          path: |
+            artifacts/run-exact-windows/image_results.csv
+            artifacts/run-exact-windows/aggregate_results.csv
+            artifacts/run-exact-windows/source_manifest.json
+            artifacts/run-exact-windows/run_manifest.json
+            artifacts/run-exact-windows/run_audit_manifest.json
+            artifacts/run-exact-windows/performance_summary.txt
+          if-no-files-found: ignore

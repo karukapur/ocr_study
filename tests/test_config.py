@@ -16,16 +16,16 @@ def test_ratio_grid_has_sixteen_base_points_plus_extra() -> None:
 
 def test_checked_in_config_has_expected_layout_psms() -> None:
     config = load_config(ROOT / "benchmark.yaml")
-    assert len(config.patterns) == 29
+    assert len(config.patterns) == 13
     assert len(config.ratios) == 17
     assert all(
         pattern.psm == (10 if pattern.layout == "single_char" else 7)
         for pattern in config.patterns
     )
-    assert [pattern.text for pattern in config.patterns[:2]] == ["A", "8"]
+    assert [pattern.text for pattern in config.patterns[:2]] == ["A", "做"]
     assert [
         pattern.text for pattern in config.patterns if pattern.layout == "single_char"
-    ] == ["A", "8", "做", "剪"]
+    ] == ["A", "做", "剪"]
 
 
 def test_ratio_slug_is_stable() -> None:

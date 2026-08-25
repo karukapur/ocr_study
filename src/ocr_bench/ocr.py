@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import TesseractSpec
-from .util import sha256_file
+from .util import normalize_lf_text, sha256_bytes, sha256_file
 
 
 class TesseractValidationError(RuntimeError):
@@ -20,6 +20,7 @@ LANGUAGE_CODES = {
     "en": "eng",
     "zh_tra": "chi_tra",
 }
+REQUIRED_EXACT_TESSERACT_VERSION = "5.5.1"
 
 
 def tesseract_language(dataset_language: str) -> str:
@@ -29,7 +30,18 @@ def tesseract_language(dataset_language: str) -> str:
         raise ValueError(f"no Tesseract language mapping for {dataset_language!r}") from error
 
 
-def validate_tesseract(spec: TesseractSpec, required_languages: set[str]) -> dict[str, Any]:
+def _parse_tesseract_version(stdout: str) -> str:
+    first_line = stdout.splitlines()[0].strip() if stdout.splitlines() else ""
+    match = re.search(r"tesseract\s+([0-9]+(?:\.[0-9]+)*)", first_line, re.IGNORECASE)
+    return match.group(1) if match else first_line
+
+
+def validate_tesseract(
+    spec: TesseractSpec,
+    required_languages: set[str],
+    *,
+    exact: bool = False,
+) -> dict[str, Any]:
     executable = shutil.which(spec.executable)
     if executable is None:
         raise TesseractValidationError(
@@ -40,6 +52,12 @@ def validate_tesseract(spec: TesseractSpec, required_languages: set[str]) -> dic
     )
     if version_process.returncode != 0:
         raise TesseractValidationError(version_process.stderr.strip() or "tesseract --version failed")
+    parsed_version = _parse_tesseract_version(version_process.stdout)
+    if exact and parsed_version != REQUIRED_EXACT_TESSERACT_VERSION:
+        raise TesseractValidationError(
+            f"exact mode requires Tesseract {REQUIRED_EXACT_TESSERACT_VERSION}; "
+            f"found {parsed_version or 'unknown'}"
+        )
     language_command = [executable]
     if spec.tessdata_dir is not None:
         if not spec.tessdata_dir.is_dir():
@@ -72,13 +90,17 @@ def validate_tesseract(spec: TesseractSpec, required_languages: set[str]) -> dic
         language_hashes[language] = (
             sha256_file(traineddata) if traineddata is not None and traineddata.is_file() else None
         )
-    return {
+    result = {
         "executable": executable,
         "version": version_process.stdout.splitlines()[0].strip(),
         "available_languages": sorted(available),
         "tessdata_dir": str(tessdata_dir) if tessdata_dir else None,
         "language_sha256": language_hashes,
     }
+    if exact:
+        result["executable_sha256"] = sha256_file(Path(executable))
+        result["parsed_version"] = parsed_version
+    return result
 
 
 def run_tesseract(
@@ -113,28 +135,34 @@ def run_tesseract(
         process = subprocess.run(
             command,
             capture_output=True,
-            text=True,
-            errors="replace",
             timeout=spec.timeout_seconds,
             check=False,
             env=environment,
         )
         elapsed = time.perf_counter() - started
+        stdout = normalize_lf_text(process.stdout)
+        stderr = normalize_lf_text(process.stderr)
         return {
             "command": command,
             "returncode": process.returncode,
-            "stdout": process.stdout,
-            "stderr": process.stderr,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_sha256": sha256_bytes(stdout.encode("utf-8")),
+            "stderr_sha256": sha256_bytes(stderr.encode("utf-8")),
             "elapsed_seconds": elapsed,
             "status": "ok" if process.returncode == 0 else "error",
-            "error": "" if process.returncode == 0 else process.stderr.strip(),
+            "error": "" if process.returncode == 0 else stderr.strip(),
         }
     except subprocess.TimeoutExpired as error:
+        stdout = normalize_lf_text(error.stdout or b"")
+        stderr = normalize_lf_text(error.stderr or b"")
         return {
             "command": command,
             "returncode": None,
-            "stdout": error.stdout or "",
-            "stderr": error.stderr or "",
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_sha256": sha256_bytes(stdout.encode("utf-8")),
+            "stderr_sha256": sha256_bytes(stderr.encode("utf-8")),
             "elapsed_seconds": time.perf_counter() - started,
             "status": "error",
             "error": f"Tesseract timed out after {spec.timeout_seconds} seconds",

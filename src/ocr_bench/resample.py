@@ -11,11 +11,11 @@ from .util import round_half_up
 
 
 METHODS = (
-    "bin_floor",
-    "bin_ceil",
+    # "bin_floor",
+    # "bin_ceil",
     "opencv_bilinear",
-    "lanczos2_7tap_16phase",
-    "lanczos3_7tap_16phase",
+    # "lanczos2_7tap_16phase",
+    # "lanczos3_7tap_16phase",
 )
 TAP_OFFSETS = np.arange(-3, 4, dtype=np.int64)
 PHASES = 16
@@ -234,6 +234,66 @@ def opencv_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
     )
 
 
+def fixed_point_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
+    if image.ndim != 2 or image.dtype != np.uint8:
+        raise ValueError("fixed_point_bilinear expects a 2D uint8 image")
+    source_height, source_width = image.shape
+    destination_width = output_length(source_width, ratio)
+    destination_height = output_length(source_height, ratio)
+    scale_x_num = source_width
+    scale_x_den = destination_width
+    scale_y_num = source_height
+    scale_y_den = destination_height
+    pixels = np.empty((destination_height, destination_width), dtype=np.uint8)
+
+    x_terms: list[tuple[int, int, int]] = []
+    for destination_x in range(destination_width):
+        coordinate_num = (2 * destination_x + 1) * scale_x_num - scale_x_den
+        coordinate_den = 2 * scale_x_den
+        base = coordinate_num // coordinate_den
+        fraction = coordinate_num - base * coordinate_den
+        x0 = min(max(base, 0), source_width - 1)
+        x1 = min(max(base + 1, 0), source_width - 1)
+        x_terms.append((x0, x1, fraction))
+
+    y_terms: list[tuple[int, int, int]] = []
+    for destination_y in range(destination_height):
+        coordinate_num = (2 * destination_y + 1) * scale_y_num - scale_y_den
+        coordinate_den = 2 * scale_y_den
+        base = coordinate_num // coordinate_den
+        fraction = coordinate_num - base * coordinate_den
+        y0 = min(max(base, 0), source_height - 1)
+        y1 = min(max(base + 1, 0), source_height - 1)
+        y_terms.append((y0, y1, fraction))
+
+    denominator = 2 * scale_x_den * 2 * scale_y_den
+    for destination_y, (y0, y1, fy) in enumerate(y_terms):
+        wy0 = 2 * scale_y_den - fy
+        wy1 = fy
+        for destination_x, (x0, x1, fx) in enumerate(x_terms):
+            wx0 = 2 * scale_x_den - fx
+            wx1 = fx
+            value = (
+                int(image[y0, x0]) * wx0 * wy0
+                + int(image[y0, x1]) * wx1 * wy0
+                + int(image[y1, x0]) * wx0 * wy1
+                + int(image[y1, x1]) * wx1 * wy1
+            )
+            pixels[destination_y, destination_x] = min(
+                255, max(0, (value + denominator // 2) // denominator)
+            )
+    return ResizeResult(
+        pixels=pixels,
+        metadata={
+            "interpolation": "fixed_point_bilinear",
+            "coordinate_mapping": "half_pixel_centers",
+            "boundary": "clamp",
+            "actual_scale_x": source_width / destination_width,
+            "actual_scale_y": source_height / destination_height,
+        },
+    )
+
+
 @lru_cache(maxsize=64)
 def reference_coefficient_bank(scale: float) -> np.ndarray:
     """Build a float64 129-slot/1024-phase scale-aware Lanczos-3 bank."""
@@ -336,6 +396,7 @@ def resize_image(
     method: str,
     *,
     boundary: str = "white",
+    exact: bool = False,
 ) -> ResizeResult:
     if method == "bin_floor":
         factor = integer_factor(requested_ratio, "floor")
@@ -362,6 +423,8 @@ def resize_image(
             },
         )
     if method == "opencv_bilinear":
+        if exact:
+            return fixed_point_bilinear(image, requested_ratio)
         return opencv_bilinear(image, requested_ratio)
     if method == "lanczos2_7tap_16phase":
         return lanczos_resize(image, requested_ratio, lobes=2, boundary=boundary)

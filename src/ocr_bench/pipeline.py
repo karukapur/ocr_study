@@ -14,7 +14,14 @@ from .fonts import validate_all_fonts
 from .metrics import aggregate_rows, character_error_rate, normalize_text
 from .ocr import run_tesseract, tesseract_language, validate_tesseract
 from .resample import METHODS, resize_image
-from .util import read_json, sha256_file, software_environment, write_json
+from .util import (
+    pixel_sha256,
+    read_json,
+    save_deterministic_png,
+    sha256_file,
+    software_environment,
+    write_json,
+)
 
 
 IMAGE_RESULT_FIELDS = (
@@ -52,6 +59,14 @@ IMAGE_RESULT_FIELDS = (
     "error",
 )
 
+EXACT_IMAGE_RESULT_FIELDS = tuple(
+    field for field in IMAGE_RESULT_FIELDS if field != "ocr_seconds"
+) + (
+    "source_pixel_sha256",
+    "output_pixel_sha256",
+    "ocr_stdout_sha256",
+)
+
 AGGREGATE_FIELDS = (
     "requested_ratio",
     "method",
@@ -61,6 +76,34 @@ AGGREGATE_FIELDS = (
     "cer",
     "pattern_count",
 )
+
+
+def _portable_path(path: Path, base: Path) -> str:
+    try:
+        return path.relative_to(base).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _deterministic_tesseract_info(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in info.items()
+        if key not in {"executable", "tessdata_dir", "available_languages"}
+    }
+
+
+def _portable_font_info(font_info: dict[str, Any], base: Path) -> dict[str, Any]:
+    portable: dict[str, Any] = {}
+    for language, info in font_info.items():
+        if isinstance(info, dict):
+            item = dict(info)
+            if "path" in item:
+                item["path"] = _portable_path(Path(str(item["path"])), base)
+            portable[language] = item
+        else:
+            portable[language] = info
+    return portable
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]], fields: tuple[str, ...]) -> None:
@@ -96,7 +139,14 @@ def _prepare_study_directories(output: Path, force: bool) -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
 
-def run_study(config: BenchmarkConfig, output: Path, force: bool = False) -> dict[str, Any]:
+def run_study(
+    config: BenchmarkConfig,
+    output: Path,
+    force: bool = False,
+    *,
+    exact: bool = False,
+    deterministic_resize: bool = False,
+) -> dict[str, Any]:
     source_manifest_path = output / "source_manifest.json"
     if not source_manifest_path.is_file():
         raise FileNotFoundError(
@@ -113,12 +163,13 @@ def run_study(config: BenchmarkConfig, output: Path, force: bool = False) -> dic
         raise RuntimeError("benchmark.yaml changed after source generation; regenerate canonical images")
 
     font_info = validate_all_fonts(config.fonts, config.patterns)
-    tess_info = validate_tesseract(config.tesseract, {"eng", "chi_tra"})
-    # Import once here to report a prerequisite error before doing any resizing.
-    try:
-        import cv2  # noqa: F401
-    except ImportError as error:
-        raise RuntimeError("OpenCV is missing; install the project dependencies") from error
+    tess_info = validate_tesseract(config.tesseract, {"eng", "chi_tra"}, exact=exact)
+    if not exact or not deterministic_resize:
+        # Import once here to report a prerequisite error before doing any resizing.
+        try:
+            import cv2  # noqa: F401
+        except ImportError as error:
+            raise RuntimeError("OpenCV is missing; install the project dependencies") from error
 
     rows: list[dict[str, Any]] = []
     audit_records: list[dict[str, Any]] = []
@@ -129,9 +180,17 @@ def run_study(config: BenchmarkConfig, output: Path, force: bool = False) -> dic
         if actual_source_hash != source_record["sha256"]:
             raise RuntimeError(f"canonical source hash mismatch: {source_path}")
         source_pixels = np.asarray(Image.open(source_path).convert("L"), dtype=np.uint8)
+        actual_source_pixel_hash = pixel_sha256(source_pixels)
+        if exact and source_record.get("pixel_sha256") != actual_source_pixel_hash:
+            raise RuntimeError(f"canonical source pixel hash mismatch: {source_path}")
         requested_ratio = float(source_record["requested_ratio"])
         for method in METHODS:
-            resized = resize_image(source_pixels, requested_ratio, method)
+            resized = resize_image(
+                source_pixels,
+                requested_ratio,
+                method,
+                exact=exact and deterministic_resize,
+            )
             relative_output = (
                 Path("resized")
                 / method
@@ -139,9 +198,13 @@ def run_study(config: BenchmarkConfig, output: Path, force: bool = False) -> dic
                 / f"{ratio_slug(requested_ratio)}.png"
             )
             output_path = output / relative_output
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            Image.fromarray(resized.pixels).save(output_path, format="PNG", optimize=False)
+            if exact:
+                save_deterministic_png(output_path, resized.pixels)
+            else:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                Image.fromarray(resized.pixels).save(output_path, format="PNG", optimize=False)
             output_hash = sha256_file(output_path)
+            output_pixel_hash = pixel_sha256(resized.pixels)
             output_glyph_height = measure_resized_glyph_height(
                 resized.pixels,
                 int(source_record["canvas_width"]),
@@ -199,8 +262,10 @@ def run_study(config: BenchmarkConfig, output: Path, force: bool = False) -> dic
                 "integer_bin_factor": metadata.get("integer_bin_factor", ""),
                 "source_path": source_record["image_path"],
                 "source_sha256": actual_source_hash,
+                "source_pixel_sha256": actual_source_pixel_hash,
                 "output_path": relative_output.as_posix(),
                 "output_sha256": output_hash,
+                "output_pixel_sha256": output_pixel_hash,
                 "font_path": source_record["font_path"],
                 "font_index": source_record["font_index"],
                 "font_size": source_record["font_size"],
@@ -218,41 +283,78 @@ def run_study(config: BenchmarkConfig, output: Path, force: bool = False) -> dic
                 "reference_chars": reference_chars,
                 "cer": cer,
                 "ocr_seconds": ocr_result["elapsed_seconds"],
+                "ocr_stdout_sha256": ocr_result["stdout_sha256"],
                 "status": ocr_result["status"],
                 "error": ocr_result["error"],
             }
             rows.append(row)
-            audit_records.append(
-                {
-                    "pattern_id": source_record["pattern_id"],
-                    "requested_ratio": requested_ratio,
-                    "method": method,
-                    "source_sha256": actual_source_hash,
-                    "output_sha256": output_hash,
-                    "resampler": metadata,
-                    "ocr_command": ocr_result["command"],
-                    "ocr_returncode": ocr_result["returncode"],
-                }
-            )
+            audit_record = {
+                "pattern_id": source_record["pattern_id"],
+                "requested_ratio": requested_ratio,
+                "method": method,
+                "source_sha256": actual_source_hash,
+                "output_sha256": output_hash,
+                "resampler": metadata,
+                "ocr_command": ocr_result["command"],
+                "ocr_returncode": ocr_result["returncode"],
+            }
+            if exact:
+                audit_record.update(
+                    {
+                        "source_pixel_sha256": actual_source_pixel_hash,
+                        "output_pixel_sha256": output_pixel_hash,
+                        "ocr_stdout_sha256": ocr_result["stdout_sha256"],
+                        "ocr_stderr_sha256": ocr_result["stderr_sha256"],
+                        "ocr_seconds": ocr_result["elapsed_seconds"],
+                    }
+                )
+            audit_records.append(audit_record)
 
     aggregate = aggregate_rows(rows)
-    _write_csv(output / "image_results.csv", rows, IMAGE_RESULT_FIELDS)
+    _write_csv(
+        output / "image_results.csv",
+        rows,
+        EXACT_IMAGE_RESULT_FIELDS if exact else IMAGE_RESULT_FIELDS,
+    )
     _write_csv(output / "aggregate_results.csv", aggregate, AGGREGATE_FIELDS)
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema_version": 1,
-        "config_path": str(config.source_path),
+        "config_path": (
+            _portable_path(config.source_path, config.source_path.parent)
+            if exact
+            else str(config.source_path)
+        ),
         "config_sha256": sha256_file(config.source_path),
-        "software": software_environment(),
-        "fonts": font_info,
-        "tesseract": tess_info,
+        "fonts": _portable_font_info(font_info, config.source_path.parent) if exact else font_info,
+        "tesseract": _deterministic_tesseract_info(tess_info) if exact else tess_info,
         "ratios": list(config.ratios),
         "methods": list(METHODS),
         "source_count": len(source_manifest["sources"]),
         "result_count": len(rows),
         "failure_count": failures,
         "expected_result_count": expected_sources * len(METHODS),
-        "records": audit_records,
     }
+    if exact:
+        manifest["exact_mode"] = True
+        manifest["deterministic_resize"] = deterministic_resize
+        manifest["records"] = [
+            {
+                key: value
+                for key, value in record.items()
+                if key not in {"ocr_command", "ocr_returncode", "ocr_stderr_sha256", "ocr_seconds"}
+            }
+            for record in audit_records
+        ]
+        audit = {
+            "schema_version": 1,
+            "software": software_environment(),
+            "tesseract": tess_info,
+            "records": audit_records,
+        }
+        write_json(output / "run_audit_manifest.json", audit)
+    else:
+        manifest["software"] = software_environment()
+        manifest["records"] = audit_records
     write_json(output / "run_manifest.json", manifest)
     if len(rows) != expected_sources * len(METHODS):
         raise RuntimeError(f"created {len(rows)} result rows, expected {expected_sources * len(METHODS)}")

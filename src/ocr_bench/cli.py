@@ -15,14 +15,31 @@ def _parser() -> argparse.ArgumentParser:
         description="Controlled 16-pixel English and Traditional Chinese OCR benchmark",
     )
     parser.add_argument(
-        "command", choices=("generate", "study", "report", "export-comparison", "all")
+        "command",
+        choices=("generate", "study", "report", "export-comparison", "compare-runs", "all"),
     )
-    parser.add_argument("--config", required=True, type=Path, help="benchmark YAML configuration")
-    parser.add_argument("--output", required=True, type=Path, help="run output directory")
+    parser.add_argument("runs", nargs="*", type=Path, help="run directories for compare-runs")
+    parser.add_argument("--config", type=Path, help="benchmark YAML configuration")
+    parser.add_argument("--output", type=Path, help="run output directory")
     parser.add_argument(
         "--force",
         action="store_true",
         help="replace outputs owned by the selected stage",
+    )
+    parser.add_argument(
+        "--exact",
+        action="store_true",
+        help="write reproducibility manifests, stable PNGs, and exact OCR metadata without changing legacy benchmark semantics",
+    )
+    parser.add_argument(
+        "--deterministic-renderer",
+        action="store_true",
+        help="with --exact, replace Pillow text rendering with the deterministic in-repo renderer",
+    )
+    parser.add_argument(
+        "--deterministic-resize",
+        action="store_true",
+        help="with --exact, replace OpenCV bilinear with the deterministic fixed-point bilinear kernel",
     )
     parser.add_argument(
         "--natural-input",
@@ -40,6 +57,22 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "compare-runs":
+            if len(args.runs) != 2:
+                raise ValueError("compare-runs requires exactly two run directories")
+            from .compare_runs import compare_runs
+
+            problems = compare_runs(args.runs[0].resolve(), args.runs[1].resolve())
+            if problems:
+                for problem in problems:
+                    print(problem, file=sys.stderr)
+                return 1
+            print(f"Runs match: {args.runs[0]} and {args.runs[1]}")
+            return 0
+        if args.config is None or args.output is None:
+            raise ValueError(f"{args.command} requires --config and --output")
+        if (args.deterministic_renderer or args.deterministic_resize) and not args.exact:
+            raise ValueError("--deterministic-renderer and --deterministic-resize require --exact")
         config = load_config(args.config)
         output = args.output.resolve()
         forbidden_outputs = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
@@ -50,10 +83,22 @@ def main(argv: list[str] | None = None) -> int:
             )
         output.mkdir(parents=True, exist_ok=True)
         if args.command in {"generate", "all"}:
-            manifest = generate_sources(config, output, force=args.force)
+            manifest = generate_sources(
+                config,
+                output,
+                force=args.force,
+                exact=args.exact,
+                deterministic_renderer=args.deterministic_renderer,
+            )
             print(f"Generated {len(manifest['sources'])} canonical images in {output}")
         if args.command in {"study", "all"}:
-            manifest = run_study(config, output, force=args.force)
+            manifest = run_study(
+                config,
+                output,
+                force=args.force,
+                exact=args.exact,
+                deterministic_resize=args.deterministic_resize,
+            )
             print(f"Evaluated {manifest['result_count']} resized images")
         if args.command in {"report", "all"}:
             from .report import generate_report

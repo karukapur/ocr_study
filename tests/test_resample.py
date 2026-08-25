@@ -9,6 +9,7 @@ from ocr_bench.resample import (
     TAP_OFFSETS,
     box_bin,
     coefficient_bank,
+    fixed_point_bilinear,
     integer_factor,
     lanczos_resize,
     output_length,
@@ -70,6 +71,22 @@ def test_lanczos_white_extension_preserves_white(lobes: int) -> None:
 def test_output_dimensions_round_half_up() -> None:
     assert output_length(12, 1.625) == 7
     assert output_length(18, 1.625) == 11
+
+
+def test_fixed_point_bilinear_is_deterministic_for_known_array() -> None:
+    image = np.array(
+        [
+            [0, 16, 32, 48],
+            [64, 80, 96, 112],
+            [128, 144, 160, 176],
+            [192, 208, 224, 240],
+        ],
+        dtype=np.uint8,
+    )
+    result = fixed_point_bilinear(image, 2.0)
+    expected = np.array([[40, 72], [168, 200]], dtype=np.uint8)
+    np.testing.assert_array_equal(result.pixels, expected)
+    assert result.metadata["interpolation"] == "fixed_point_bilinear"
 
 
 def test_integer_floor_and_ceil_are_identical() -> None:
