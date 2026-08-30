@@ -273,7 +273,9 @@ def fixed_point_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
                 source_width, destination_width
             )
             y_offsets, y_coefficients, _, _ = _opencv_linear_terms(
-                source_height, destination_height
+                source_height,
+                destination_height,
+                clamp_edge_coefficients=False,
             )
             source = image.astype(np.int64)
             right_offsets = np.minimum(x_offsets + 1, source_width - 1)
@@ -294,11 +296,15 @@ def fixed_point_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
             bottom = horizontal[np.clip(y_offsets + 1, 0, source_height - 1)]
             beta0 = y_coefficients[:, 0, None]
             beta1 = y_coefficients[:, 1, None]
-            values = (
-                top * beta0
-                + bottom * beta1
-                + (1 << (OPENCV_LINEAR_COEF_BITS * 2 - 1))
-            ) >> (OPENCV_LINEAR_COEF_BITS * 2)
+            # Match OpenCV's legacy CV_8U vertical kernel exactly.  It does
+            # not perform one ideal Q22 multiply-and-round.  Each horizontal
+            # Q11 value first loses four low bits, each vertical product then
+            # takes its high 16 bits, and the two terms are rounded from Q2.
+            # Keeping this sequence is what makes the clone agree with
+            # cv2.INTER_LINEAR rather than merely approximate it to +/-1.
+            vertical_top = (beta0 * (top >> 4)) >> 16
+            vertical_bottom = (beta1 * (bottom >> 4)) >> 16
+            values = (vertical_top + vertical_bottom + 2) >> 2
             pixels = np.clip(values, 0, 255).astype(np.uint8)
             kernel = "opencv_inter_linear_8u_fixed_point"
     return ResizeResult(
@@ -310,6 +316,7 @@ def fixed_point_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
             "boundary": "clamp",
             "coefficient_bits": OPENCV_LINEAR_COEF_BITS,
             "coefficient_scale": OPENCV_LINEAR_COEF_SCALE,
+            "vertical_rounding": "opencv_legacy_cv8u",
             "actual_scale_x": source_width / destination_width,
             "actual_scale_y": source_height / destination_height,
         },
@@ -317,7 +324,10 @@ def fixed_point_bilinear(image: np.ndarray, ratio: float) -> ResizeResult:
 
 
 def _opencv_linear_terms(
-    source_length: int, destination_length: int
+    source_length: int,
+    destination_length: int,
+    *,
+    clamp_edge_coefficients: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, int, int]:
     offsets = np.empty(destination_length, dtype=np.int64)
     coefficients = np.empty((destination_length, 2), dtype=np.int64)
@@ -330,12 +340,14 @@ def _opencv_linear_terms(
         fraction = np.float32(coordinate - source)
         if source < 0:
             minimum = destination + 1
-            source = 0
-            fraction = np.float32(0.0)
+            if clamp_edge_coefficients:
+                source = 0
+                fraction = np.float32(0.0)
         if source >= source_length - 1:
             maximum = min(maximum, destination)
-            source = source_length - 1
-            fraction = np.float32(0.0)
+            if clamp_edge_coefficients:
+                source = source_length - 1
+                fraction = np.float32(0.0)
         offsets[destination] = source
         coefficients[destination] = (
             _round_float32(

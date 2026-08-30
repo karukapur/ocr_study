@@ -14,3 +14,7 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Generated replicate-bilinear artifacts
+experiments/replicate_bilinear/test_patterns/
+experiments/replicate_bilinear/results/
