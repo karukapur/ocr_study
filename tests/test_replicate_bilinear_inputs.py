@@ -91,10 +91,13 @@ def test_resize_rgb_planes_accepts_separate_width_and_height_ratios() -> None:
 
 
 def test_parse_ratio_groups_supports_uniform_and_separate_ratios() -> None:
-    assert parse_ratio_groups([[2.0], [2.0, 1.5]]) == (
+    assert parse_ratio_groups([2.625, (2.625, 2.625), [2.0], [2.0, 1.5]]) == (
+        (2.625, 2.625),
+        (2.625, 2.625),
         (2.0, 2.0),
         (2.0, 1.5),
     )
+    assert (2.0, 1.5) in parse_ratio_groups(None)
 
 
 def test_plot_results_handles_all_exact_comparisons(tmp_path: Path) -> None:

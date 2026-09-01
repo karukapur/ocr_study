@@ -1,4 +1,14 @@
-"""Compare OpenCV bilinear with the float64 implementation from issue #25018."""
+"""Compare OpenCV bilinear with the float64 implementation from issue #25018.
+
+Run from the repository root using the RATIOS configured in this file:
+    .venv/bin/python experiments/replicate_bilinear/compare_bilinear_floating_psnr_github.py
+
+Override RATIOS with one uniform ratio:
+    .venv/bin/python experiments/replicate_bilinear/compare_bilinear_floating_psnr_github.py --ratio 2.0
+
+Override RATIOS with width and height ratios:
+    .venv/bin/python experiments/replicate_bilinear/compare_bilinear_floating_psnr_github.py --ratio 2.0 1.5
+"""
 
 from __future__ import annotations
 
@@ -25,6 +35,8 @@ from ocr_bench.resample import ResizeResult, opencv_bilinear, output_length  # n
 from ocr_bench.util import pixel_sha256, save_deterministic_png  # noqa: E402
 
 
+# Used when no --ratio flags are supplied. A float applies to both dimensions;
+# a (width_ratio, height_ratio) tuple scales the dimensions independently.
 RATIOS = (
     1.133333333333,
     1.4,
@@ -34,6 +46,7 @@ RATIOS = (
     2.6,
     2.625,
     3.0,
+    (2.0, 1.5),  # width ratio, height ratio
 )
 PATTERN_DIR = Path(__file__).resolve().parent / "test_patterns"
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "results_floating_psnr_github"
@@ -385,18 +398,23 @@ def write_summary(results: pd.DataFrame, output_dir: Path) -> None:
     (output_dir / "summary.md").write_text("\n".join(rows), encoding="utf-8")
 
 
-def parse_ratio_groups(groups: Sequence[Sequence[float]] | None) -> tuple[RatioPair, ...]:
-    if groups is None:
-        return tuple((ratio, ratio) for ratio in RATIOS)
+def parse_ratio_groups(
+    groups: Sequence[float | Sequence[float]] | None,
+) -> tuple[RatioPair, ...]:
+    ratio_specs = RATIOS if groups is None else groups
     ratios: list[RatioPair] = []
-    for group in groups:
-        if len(group) == 1:
-            ratio_w = ratio_h = group[0]
-        elif len(group) == 2:
-            ratio_w, ratio_h = group
+    for spec in ratio_specs:
+        if isinstance(spec, (int, float)):
+            ratio_w = ratio_h = float(spec)
+        elif len(spec) == 1:
+            ratio_w = ratio_h = float(spec[0])
+        elif len(spec) == 2:
+            ratio_w, ratio_h = (float(spec[0]), float(spec[1]))
         else:
-            raise ValueError("each --ratio accepts either WIDTH or WIDTH HEIGHT")
-        if ratio_w <= 0 or ratio_h <= 0:
+            raise ValueError("each ratio accepts either WIDTH or WIDTH HEIGHT")
+        if not np.isfinite(ratio_w) or not np.isfinite(ratio_h):
+            raise ValueError("ratios must be finite")
+        if ratio_w <= 0.0 or ratio_h <= 0.0:
             raise ValueError("ratios must be positive")
         ratios.append((ratio_w, ratio_h))
     return tuple(ratios)
