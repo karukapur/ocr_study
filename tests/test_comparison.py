@@ -20,8 +20,8 @@ def _write_ranking_csv(output: Path) -> None:
     rows = [
         ("bin_floor", 1.0, 0, 10),
         ("bin_ceil", 3.0, 10, 10),
-        ("lanczos3_7tap_16phase", 1.8, 1, 10),
-        ("lanczos3_7tap_16phase", 2.0, 1, 10),
+        ("lanczos3", 1.8, 1, 10),
+        ("lanczos3", 2.0, 1, 10),
         ("opencv_bilinear", 2.333333333333, 9, 10),
         ("opencv_bilinear", 2.6, 9, 10),
     ]

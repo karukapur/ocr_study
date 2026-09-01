@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,20 @@ def test_pixel_hash_is_independent_of_png_encoding(tmp_path: Path) -> None:
 def test_deterministic_png_bytes_are_stable() -> None:
     image = np.array([[0, 128], [200, 255]], dtype=np.uint8)
     assert deterministic_png_bytes(image) == deterministic_png_bytes(image.copy())
+
+
+def test_rgb_pixel_hash_and_deterministic_png_are_stable() -> None:
+    image = np.array(
+        [[[0, 64, 128], [255, 200, 100]], [[12, 34, 56], [78, 90, 123]]],
+        dtype=np.uint8,
+    )
+    encoded = deterministic_png_bytes(image)
+
+    assert pixel_sha256(image) == pixel_sha256(image.copy())
+    assert encoded == deterministic_png_bytes(image.copy())
+    with Image.open(BytesIO(encoded)) as decoded:
+        assert decoded.mode == "RGB"
+        np.testing.assert_array_equal(np.asarray(decoded), image)
 
 
 def test_text_normalization_uses_utf8_and_lf() -> None:

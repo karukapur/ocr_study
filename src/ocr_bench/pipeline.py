@@ -13,7 +13,7 @@ from .dataset import measure_resized_glyph_height
 from .fonts import validate_all_fonts
 from .metrics import aggregate_rows, character_error_rate, normalize_text
 from .ocr import run_tesseract, tesseract_language, validate_tesseract
-from .resample import METHODS, ResizeResult, resize_image
+from .resample import ResizeResult, resize_image
 from .util import (
     pixel_sha256,
     read_json,
@@ -255,7 +255,6 @@ def run_study(
     force: bool = False,
     *,
     exact: bool = False,
-    deterministic_resize: bool = False,
     baseline_run: Path | None = None,
 ) -> dict[str, Any]:
     source_manifest_path = output / "source_manifest.json"
@@ -275,7 +274,8 @@ def run_study(
 
     font_info = validate_all_fonts(config.fonts, config.patterns)
     tess_info = validate_tesseract(config.tesseract, {"eng", "chi_tra"}, exact=exact)
-    if not exact or not deterministic_resize:
+    methods = config.resampling.methods
+    if "opencv_bilinear" in methods:
         # Import once here to report a prerequisite error before doing any resizing.
         try:
             import cv2  # noqa: F401
@@ -296,7 +296,7 @@ def run_study(
         if exact and source_record.get("pixel_sha256") != actual_source_pixel_hash:
             raise RuntimeError(f"canonical source pixel hash mismatch: {source_path}")
         requested_ratio = float(source_record["requested_ratio"])
-        for method in METHODS:
+        for method in methods:
             relative_output = (
                 Path("resized")
                 / method
@@ -313,7 +313,7 @@ def run_study(
                     requested_ratio,
                     actual_source_pixel_hash,
                 )
-                if exact and deterministic_resize and baseline_run is not None
+                if exact and baseline_run is not None
                 else None
             )
             resized = (
@@ -321,7 +321,9 @@ def run_study(
                     source_pixels,
                     requested_ratio,
                     method,
-                    exact=exact and deterministic_resize,
+                    taps=config.resampling.lanczos_taps,
+                    phases=config.resampling.lanczos_phases,
+                    interpolation=config.resampling.interpolation,
                 )
                 if baseline_result is None
                 else baseline_result[0]
@@ -471,15 +473,14 @@ def run_study(
         "fonts": _portable_font_info(font_info, config.source_path.parent) if exact else font_info,
         "tesseract": _deterministic_tesseract_info(tess_info) if exact else tess_info,
         "ratios": list(config.ratios),
-        "methods": list(METHODS),
+        "methods": list(methods),
         "source_count": len(source_manifest["sources"]),
         "result_count": len(rows),
         "failure_count": failures,
-        "expected_result_count": expected_sources * len(METHODS),
+        "expected_result_count": expected_sources * len(methods),
     }
     if exact:
         manifest["exact_mode"] = True
-        manifest["deterministic_resize"] = deterministic_resize
         manifest["records"] = [
             {
                 key: value
@@ -499,8 +500,10 @@ def run_study(
         manifest["software"] = software_environment()
         manifest["records"] = audit_records
     write_json(output / "run_manifest.json", manifest)
-    if len(rows) != expected_sources * len(METHODS):
-        raise RuntimeError(f"created {len(rows)} result rows, expected {expected_sources * len(METHODS)}")
+    if len(rows) != expected_sources * len(methods):
+        raise RuntimeError(
+            f"created {len(rows)} result rows, expected {expected_sources * len(methods)}"
+        )
     if failures:
         raise RuntimeError(
             f"Tesseract failed for {failures} images; failures are recorded in image_results.csv"

@@ -21,28 +21,35 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .config import BenchmarkConfig, ratio_slug
 from .ranking import select_method_ratio_extremes
-from .resample import METHODS
 
 
 METHOD_LABELS = {
     "bin_floor": "Bin floor",
     "bin_ceil": "Bin ceil",
     "opencv_bilinear": "OpenCV bilinear",
-    "lanczos2_7tap_16phase": "Lanczos-2 7t/16p",
-    "lanczos3_7tap_16phase": "Lanczos-3 7t/16p",
+    "floating_point_bilinear": "Floating-point bilinear",
+    "fixed_point_bilinear": "Fixed-point bilinear",
+    "lanczos2": "Lanczos-2",
+    "lanczos3": "Lanczos-3",
 }
 POOLED_METHOD_LABELS = {
     "bin_floor": "binning_floor",
     "bin_ceil": "binning_ceil",
     "opencv_bilinear": "bilinear",
+    "floating_point_bilinear": "floating_point_bilinear",
+    "fixed_point_bilinear": "fixed_point_bilinear",
+    "lanczos2": "lanczos2",
+    "lanczos3": "lanczos3",
     "lanczos2_7tap_16phase": "lanczos2",
     "lanczos3_7tap_16phase": "lanczos3",
 }
 METHOD_COLORS = {
-    "lanczos2_7tap_16phase": "#117BB5",
+    "lanczos2": "#117BB5",
     "bin_floor": "#E9A400",
-    "lanczos3_7tap_16phase": "#0AA47A",
+    "lanczos3": "#0AA47A",
     "opencv_bilinear": "#DB5A00",
+    "floating_point_bilinear": "#6A3D9A",
+    "fixed_point_bilinear": "#7F7F7F",
     "bin_ceil": "#C777A5",
 }
 REFERENCE_HEATMAP = LinearSegmentedColormap.from_list(
@@ -134,11 +141,13 @@ def _save_figure(figure: plt.Figure, path: Path) -> None:
     plt.close(figure)
 
 
-def _plot_cer_curves(aggregate: pd.DataFrame, plots: Path) -> None:
+def _plot_cer_curves(
+    aggregate: pd.DataFrame, methods: tuple[str, ...], plots: Path
+) -> None:
     figure, axes = plt.subplots(1, 3, figsize=(17, 4.8), sharey=True)
     for axis, scope in zip(axes, SCOPE_LABELS):
         scoped = aggregate[aggregate["scope"] == scope]
-        for method in METHODS:
+        for method in methods:
             values = scoped[scoped["method"] == method].sort_values("requested_ratio")
             axis.plot(
                 values["requested_ratio"],
@@ -169,7 +178,7 @@ def _plot_cer_curves(aggregate: pd.DataFrame, plots: Path) -> None:
     for scope, title, filename in standalone:
         scoped = aggregate[aggregate["scope"] == scope]
         individual_figure, individual_axis = plt.subplots(figsize=(10, 6))
-        for method in METHODS:
+        for method in methods:
             values = scoped[scoped["method"] == method].sort_values("requested_ratio")
             individual_axis.plot(
                 values["requested_ratio"],
@@ -189,14 +198,16 @@ def _plot_cer_curves(aggregate: pd.DataFrame, plots: Path) -> None:
         _save_figure(individual_figure, plots / filename)
 
 
-def _plot_cer_heatmaps(aggregate: pd.DataFrame, plots: Path) -> None:
+def _plot_cer_heatmaps(
+    aggregate: pd.DataFrame, methods: tuple[str, ...], plots: Path
+) -> None:
     ratios = sorted(aggregate["requested_ratio"].unique())
     figure, axes = plt.subplots(3, 1, figsize=(17, 8.5), constrained_layout=True)
     image = None
     for axis, scope in zip(axes, SCOPE_LABELS):
         scoped = aggregate[aggregate["scope"] == scope]
-        matrix = np.full((len(METHODS), len(ratios)), np.nan)
-        for row_index, method in enumerate(METHODS):
+        matrix = np.full((len(methods), len(ratios)), np.nan)
+        for row_index, method in enumerate(methods):
             values = scoped[scoped["method"] == method].set_index("requested_ratio")["cer"]
             for column_index, ratio in enumerate(ratios):
                 if ratio in values.index:
@@ -204,17 +215,19 @@ def _plot_cer_heatmaps(aggregate: pd.DataFrame, plots: Path) -> None:
         image = axis.imshow(
             matrix, aspect="auto", interpolation="nearest", cmap=REFERENCE_HEATMAP
         )
-        axis.set_yticks(range(len(METHODS)), [METHOD_LABELS[method] for method in METHODS])
+        axis.set_yticks(range(len(methods)), [METHOD_LABELS[method] for method in methods])
         axis.set_xticks(range(len(ratios)), [f"{ratio:.3f}" for ratio in ratios], rotation=60)
         axis.set_title(SCOPE_LABELS[scope])
-        _style_heatmap_cells(axis, len(METHODS), len(ratios))
+        _style_heatmap_cells(axis, len(methods), len(ratios))
     if image is not None:
         figure.colorbar(image, ax=axes, label="CER", shrink=0.85)
     figure.suptitle("CER heatmaps")
     _save_figure(figure, plots / "cer_heatmaps.png")
 
 
-def _plot_glyph_heights(results: pd.DataFrame, target: int, plots: Path) -> None:
+def _plot_glyph_heights(
+    results: pd.DataFrame, methods: tuple[str, ...], target: int, plots: Path
+) -> None:
     figure, axes = plt.subplots(1, 2, figsize=(15, 5), sharey=True)
     for axis, (language, title) in zip(
         axes, (("en", "English"), ("zh_tra", "Traditional Chinese"))
@@ -224,7 +237,7 @@ def _plot_glyph_heights(results: pd.DataFrame, target: int, plots: Path) -> None
             scoped.groupby(["method", "requested_ratio"], as_index=False)["output_max_glyph_height"]
             .mean()
         )
-        for method in METHODS:
+        for method in methods:
             values = grouped[grouped["method"] == method].sort_values("requested_ratio")
             axis.plot(
                 values["requested_ratio"],
@@ -244,10 +257,12 @@ def _plot_glyph_heights(results: pd.DataFrame, target: int, plots: Path) -> None
     _save_figure(figure, plots / "glyph_height_vs_ratio.png")
 
 
-def _plot_pattern_summary(results: pd.DataFrame, plots: Path) -> None:
+def _plot_pattern_summary(
+    results: pd.DataFrame, methods: tuple[str, ...], plots: Path
+) -> None:
     patterns = list(dict.fromkeys(results["pattern_id"].tolist()))
-    matrix = np.full((len(METHODS), len(patterns)), np.nan)
-    for method_index, method in enumerate(METHODS):
+    matrix = np.full((len(methods), len(patterns)), np.nan)
+    for method_index, method in enumerate(methods):
         for pattern_index, pattern in enumerate(patterns):
             values = results[
                 (results["method"] == method) & (results["pattern_id"] == pattern)
@@ -258,10 +273,10 @@ def _plot_pattern_summary(results: pd.DataFrame, plots: Path) -> None:
     image = axis.imshow(
         matrix, aspect="auto", interpolation="nearest", cmap=REFERENCE_HEATMAP
     )
-    axis.set_yticks(range(len(METHODS)), [METHOD_LABELS[method] for method in METHODS])
+    axis.set_yticks(range(len(methods)), [METHOD_LABELS[method] for method in methods])
     axis.set_xticks(range(len(patterns)), patterns, rotation=30, ha="right")
     axis.set_title("Mean CER by pattern and method")
-    _style_heatmap_cells(axis, len(METHODS), len(patterns))
+    _style_heatmap_cells(axis, len(methods), len(patterns))
     figure.colorbar(image, ax=axis, label="Mean CER")
     _save_figure(figure, plots / "pattern_method_summary.png")
 
@@ -282,7 +297,7 @@ def _create_montages(config: BenchmarkConfig, output: Path, montage: Path) -> No
         source = output / "canonical" / pattern.id / f"{ratio_slug(ratio)}.png"
         if source.is_file():
             panels.append(("Canonical source", Image.open(source).convert("L")))
-        for method in METHODS:
+        for method in config.resampling.methods:
             path = output / "resized" / method / pattern.id / f"{ratio_slug(ratio)}.png"
             if path.is_file():
                 panels.append((METHOD_LABELS[method], Image.open(path).convert("L")))
@@ -531,10 +546,11 @@ def generate_report(config: BenchmarkConfig, output: Path, force: bool = False) 
     results = results[results["status"] == "ok"].copy()
     if results.empty:
         raise RuntimeError("there are no successful OCR rows to report")
-    _plot_cer_curves(aggregate, plots)
-    _plot_cer_heatmaps(aggregate, plots)
-    _plot_glyph_heights(results, config.target_height_px, plots)
-    _plot_pattern_summary(results, plots)
+    methods = config.resampling.methods
+    _plot_cer_curves(aggregate, methods, plots)
+    _plot_cer_heatmaps(aggregate, methods, plots)
+    _plot_glyph_heights(results, methods, config.target_height_px, plots)
+    _plot_pattern_summary(results, methods, plots)
     _create_montages(config, output, montage)
     pooled_paths = _plot_pooled_cer(results, output)
     summary_paths = _write_performance_summary(results, output)

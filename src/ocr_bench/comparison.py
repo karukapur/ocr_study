@@ -108,9 +108,15 @@ def _resize_channels(
         raise ValueError("comparison export expects an L or RGB uint8 image")
     channel_results = [resize_channel(pixels[:, :, index]) for index in range(3)]
     metadata = dict(channel_results[0].metadata)
+    floating_pixels = None
+    if all(result.floating_pixels is not None for result in channel_results):
+        floating_pixels = np.stack(
+            [result.floating_pixels for result in channel_results], axis=2
+        )
     return ResizeResult(
         pixels=np.stack([result.pixels for result in channel_results], axis=2),
         metadata=metadata,
+        floating_pixels=floating_pixels,
     )
 
 
@@ -208,6 +214,9 @@ def export_comparison(
                             channel,
                             ratio,
                             condition.method,
+                            taps=config.resampling.lanczos_taps,
+                            phases=config.resampling.lanczos_phases,
+                            interpolation=config.resampling.interpolation,
                             boundary="reflect101",
                         ),
                     )
@@ -288,7 +297,7 @@ def export_comparison(
                 "phase_normalization": "unit_dc_gain",
                 "boundary": "reflect101",
                 "color_domain": "encoded_8bit_samples",
-                "coordinate_mapping": "half_pixel_centers",
+                "coordinate_mapping": "shift",
                 "intermediate_clipping": False,
                 "pixel_rounding": "round_half_up_then_clip_uint8",
             },

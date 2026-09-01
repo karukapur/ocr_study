@@ -1,0 +1,86 @@
+# Output-domain glyph and canvas controls.
+target_height_px: 16
+ink_threshold: 250
+ignore_punctuation_in_glyph_height: true
+padding_target_px: 16
+line_spacing_target_px: 8
+canvas_multiple: 6
+
+# Generates `count` evenly spaced downscale ratios from start through stop,
+# then adds any ratios listed in `extra`. Count must be at least 2 and the
+# range must satisfy 0 < start <= stop. `extra` may be empty or omitted.
+ratio_grid:
+  start: 1.0
+  stop: 3.0
+  count: 16
+  extra: [2.625]
+
+# Each method group may be empty, but at least one method must be selected.
+# If this entire section is omitted, the defaults are OpenCV bilinear, shift
+# interpolation, 7 Lanczos taps, and 16 Lanczos phases.
+resampling:
+  # Allowed values: floor, ceil.
+  binning: [floor, ceil]
+
+  # Allowed values: opencv, floating, fixed_point.
+  # This may be either a list or one scalar, for example: `bilinear: floating`.
+  bilinear: [opencv, floating, fixed_point]
+
+  lanczos:
+    # Allowed values: 2, 3. Taps/phases apply only to these benchmark filters,
+    # not to the fixed 129-tap/1024-phase reference Lanczos implementation.
+    variants: [2, 3]
+    taps: 7       # Any positive odd integer.
+    phases: 16    # Any positive integer.
+
+  # Allowed values:
+  #   shift:    (destination + 0.5) * scale - 0.5
+  #   original: destination * scale
+  # OpenCV supports only shift. Remove `opencv` from `bilinear` before using
+  # original. This choice affects floating/fixed-point bilinear and benchmark
+  # Lanczos; the reference Lanczos implementation always uses shift.
+  interpolation: shift
+
+# Font keys are dataset language IDs and must cover every pattern language.
+# `index` selects a face from a font collection and defaults to 0.
+fonts:
+  en:
+    path: fonts/Consolas-Regular.ttf
+    index: 0
+    expected_family: Consolas
+  zh_tra:
+    path: fonts/microsoft-jhenghei.ttf
+    index: 0
+    expected_family: Microsoft JhengHei
+
+# `executable`, `oem`, and `timeout_seconds` have defaults of tesseract, 1,
+# and 60. `tessdata_dir` may be omitted to use Tesseract's configured data.
+tesseract:
+  executable: tesseract
+  tessdata_dir: tessdata
+  oem: 1
+  timeout_seconds: 60
+
+# Pattern IDs must be unique. Supported layout/PSM pairs are:
+#   single_char: PSM 10
+#   single_line: PSM 7
+#   multiline:   PSM 6
+# Add or remove pattern entries as needed. Each language must have a font above.
+patterns:
+  - id: en_char_example
+    language: en
+    layout: single_char
+    psm: 10
+    text: "A"
+  - id: zh_line_example
+    language: zh_tra
+    layout: single_line
+    psm: 7
+    text: "天地玄黃宇宙洪荒"
+  - id: en_multiline_example
+    language: en
+    layout: multiline
+    psm: 6
+    text: |-
+      First OCR line
+      Second OCR line

@@ -36,11 +36,13 @@ def normalize_lf_text(value: bytes | str) -> str:
 
 
 def pixel_sha256(image: np.ndarray) -> str:
-    if image.ndim != 2 or image.dtype != np.uint8:
-        raise ValueError("pixel_sha256 expects a 2D uint8 grayscale image")
-    height, width = image.shape
+    if image.dtype != np.uint8 or (
+        image.ndim != 2 and not (image.ndim == 3 and image.shape[2] == 3)
+    ):
+        raise ValueError("pixel_sha256 expects an 8-bit grayscale or RGB image")
+    height, width = image.shape[:2]
     digest = hashlib.sha256()
-    digest.update(b"L8\0")
+    digest.update(b"L8\0" if image.ndim == 2 else b"RGB8\0")
     digest.update(struct.pack(">II", width, height))
     digest.update(np.ascontiguousarray(image).tobytes())
     return digest.hexdigest()
@@ -53,15 +55,20 @@ def _png_chunk(kind: bytes, payload: bytes) -> bytes:
 
 
 def deterministic_png_bytes(image: np.ndarray) -> bytes:
-    if image.ndim != 2 or image.dtype != np.uint8:
-        raise ValueError("deterministic_png_bytes expects a 2D uint8 grayscale image")
-    height, width = image.shape
+    if image.dtype != np.uint8 or (
+        image.ndim != 2 and not (image.ndim == 3 and image.shape[2] == 3)
+    ):
+        raise ValueError(
+            "deterministic_png_bytes expects an 8-bit grayscale or RGB image"
+        )
+    height, width = image.shape[:2]
     rows = bytearray()
     contiguous = np.ascontiguousarray(image)
     for row in contiguous:
         rows.append(0)
         rows.extend(row.tobytes())
-    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    color_type = 0 if image.ndim == 2 else 2
+    header = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
     return b"".join(
         [
             b"\x89PNG\r\n\x1a\n",

@@ -1,9 +1,9 @@
 # Controlled 16-pixel OCR resampling benchmark
 
-This project compares two integer box-binning modes, OpenCV bilinear resize,
-and custom fixed-point Lanczos-2/Lanczos-3 polyphase filters on synthetic
-English and Traditional Chinese OCR inputs. Every method uses the same
-canonical source image for a pattern and requested ratio.
+This project compares two integer box-binning modes, OpenCV/float32/fixed-point
+bilinear resize, and custom fixed-point Lanczos-2/Lanczos-3 polyphase filters
+on synthetic English and Traditional Chinese OCR inputs. Every method uses the
+same canonical source image for a pattern and requested ratio.
 
 Each source uses the smallest automatically measured square canvas that fits
 the rendered text plus 16 output-domain pixels of padding per side. The square
@@ -36,6 +36,27 @@ The stages can also be run independently:
 .venv/bin/python -m ocr_bench report --config benchmark.yaml --output artifacts/run-001
 ```
 
+The `resampling` section in `benchmark.yaml` selects the methods to run. Each
+method group may be empty, `bilinear` accepts either one name or a list, and
+Lanczos taps/phases are shared by Lanczos-2 and Lanczos-3:
+
+```yaml
+resampling:
+  binning: [floor, ceil]
+  bilinear: [opencv, floating, fixed_point]
+  lanczos:
+    variants: [2, 3]
+    taps: 7
+    phases: 16
+  interpolation: shift  # shift or original for custom kernels
+```
+
+See [`benchmark.yaml.example`](benchmark.yaml.example) for a complete annotated
+configuration, including every method and supported pattern layout.
+
+OpenCV supports only `shift` (half-pixel) coordinates. The `original` mapping
+is available for float32 bilinear, fixed-point bilinear, and benchmark Lanczos.
+
 Add `--force` to rebuild the files owned by a stage. Each run records source,
 font, tessdata, configuration, and output hashes in JSON manifests.
 
@@ -56,7 +77,6 @@ the frozen baseline run:
 
 ```bash
 .venv/bin/python -m ocr_bench all --exact \
-  --deterministic-resize \
   --baseline-run artifacts/run-001 \
   --config benchmark.yaml \
   --output artifacts/run-exact
@@ -75,27 +95,29 @@ text normalization, Tesseract `5.5.1` validation, and a separate audit manifest
 for timing/platform details.
 
 For future experiments that deliberately trade run-001 compatibility for a
-fully in-repo deterministic renderer or resize kernel, opt in explicitly:
+fully in-repo deterministic renderer, opt in explicitly and select
+`fixed_point` rather than `opencv` in `benchmark.yaml` when a deterministic
+bilinear kernel is required:
 
 ```bash
 .venv/bin/python -m ocr_bench all --exact \
   --deterministic-renderer \
-  --deterministic-resize \
   --config benchmark.yaml \
   --output artifacts/run-deterministic
 ```
 
-Changing ratios, target height, padding, fonts, or patterns is supported in
-both modes. The deterministic renderer/resizer path is the one intended for new
-cross-platform pixel regeneration; the `--baseline-run artifacts/run-001` path
-is the one intended for reproducing the already-presented baseline.
+Changing ratios, target height, padding, fonts, patterns, or resampling settings
+is supported in both modes. The deterministic renderer plus configured
+fixed-point resizer is intended for new cross-platform pixel regeneration; the
+`--baseline-run artifacts/run-001` path is intended for reproducing the
+already-presented baseline.
 
 The Windows CI workflow in `.github/workflows/windows-exact.yml` installs
 Tesseract `5.5.1`, verifies committed font and tessdata hashes, runs tests, and
 then executes:
 
 ```bash
-python -m ocr_bench all --exact --deterministic-resize --force \
+python -m ocr_bench all --exact --force \
   --config benchmark.yaml \
   --output artifacts/run-exact-windows \
   --baseline-run artifacts/run-001

@@ -9,6 +9,14 @@ ratio_grid:
   stop: 3.0
   count: 16
   extra: [2.625]
+resampling:
+  binning: [floor, ceil]
+  bilinear: [opencv, floating, fixed_point]
+  lanczos:
+    variants: [2, 3]
+    taps: 7
+    phases: 16
+  interpolation: shift
 fonts:
   en:
     path: fonts/Consolas-Regular.ttf

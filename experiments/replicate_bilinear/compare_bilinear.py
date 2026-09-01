@@ -5,6 +5,8 @@ import csv
 import gc
 import math
 import sys
+from collections.abc import Callable
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +19,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ocr_bench.resample import fixed_point_bilinear, opencv_bilinear  # noqa: E402
+from ocr_bench.resample import (  # noqa: E402
+    ResizeResult,
+    fixed_point_bilinear,
+    opencv_bilinear,
+)
 from ocr_bench.util import pixel_sha256, save_deterministic_png  # noqa: E402
 
 
@@ -33,15 +39,75 @@ RATIOS = (
 )
 PATTERN_DIR = Path(__file__).resolve().parent / "test_patterns"
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "results"
+PATTERN_SUFFIXES = frozenset({".png", ".tif", ".tiff", ".svg"})
+ResizeImplementation = Callable[[np.ndarray, float], ResizeResult]
 
 
 def ratio_slug(ratio: float) -> str:
     return f"r_{ratio:.12f}".rstrip("0").rstrip(".").replace(".", "p")
 
 
-def load_grayscale(path: Path) -> np.ndarray:
+def find_patterns(pattern_dir: Path) -> list[Path]:
+    return sorted(
+        (
+            path
+            for path in pattern_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in PATTERN_SUFFIXES
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+
+
+def load_rgb(path: Path) -> np.ndarray:
+    if path.suffix.lower() == ".svg":
+        try:
+            import cairosvg
+        except ImportError as error:
+            raise RuntimeError(
+                "CairoSVG is required to read SVG test patterns; install the "
+                "project dependencies"
+            ) from error
+        encoded = cairosvg.svg2png(url=str(path), background_color="#ffffff")
+        with Image.open(BytesIO(encoded)) as image:
+            return np.asarray(image.convert("RGB"), dtype=np.uint8)
     with Image.open(path) as image:
-        return np.asarray(image.convert("L"), dtype=np.uint8)
+        return np.asarray(image.convert("RGB"), dtype=np.uint8)
+
+
+def resize_rgb_planes(
+    image: np.ndarray,
+    ratio: float,
+    implementation: ResizeImplementation,
+) -> ResizeResult:
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+        raise ValueError("resize_rgb_planes expects an RGB uint8 image")
+
+    pixels: np.ndarray | None = None
+    floating_pixels: np.ndarray | None = None
+    metadata: dict[str, object] | None = None
+    for channel in range(3):
+        result = implementation(image[:, :, channel], ratio)
+        if pixels is None:
+            pixels = np.empty((*result.pixels.shape, 3), dtype=np.uint8)
+            metadata = result.metadata
+            if result.floating_pixels is not None:
+                floating_pixels = np.empty(
+                    (*result.floating_pixels.shape, 3),
+                    dtype=result.floating_pixels.dtype,
+                )
+        pixels[:, :, channel] = result.pixels
+        if (result.floating_pixels is None) != (floating_pixels is None):
+            raise ValueError("resize implementation returned inconsistent RGB planes")
+        if floating_pixels is not None and result.floating_pixels is not None:
+            floating_pixels[:, :, channel] = result.floating_pixels
+
+    if pixels is None or metadata is None:
+        raise RuntimeError("RGB resize produced no planes")
+    return ResizeResult(
+        pixels=pixels,
+        metadata=metadata,
+        floating_pixels=floating_pixels,
+    )
 
 
 def sqnr_db(signal: np.ndarray, error: np.ndarray) -> float:
@@ -116,8 +182,8 @@ def compare_pixels(
     output_dir: Path,
     write_images: bool,
 ) -> dict[str, object]:
-    opencv = opencv_bilinear(source, ratio)
-    fixed = fixed_point_bilinear(source, ratio)
+    opencv = resize_rgb_planes(source, ratio, opencv_bilinear)
+    fixed = resize_rgb_planes(source, ratio, fixed_point_bilinear)
     opencv_pixels = opencv.pixels
     fixed_pixels = fixed.pixels
     error = fixed_pixels.astype(np.int16) - opencv_pixels.astype(np.int16)
@@ -257,6 +323,19 @@ def svg_line_plot(
     ratios = sorted(float(value) for value in frame["ratio"].unique())
     groups = sorted(str(value) for value in frame["group"].unique())
     values = frame[value_column].replace([np.inf, -np.inf], np.nan)
+    if not values.notna().any():
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="120" '
+            'viewBox="0 0 700 120">\n'
+            '<rect width="100%" height="100%" fill="white"/>\n'
+            f'<text x="350" y="45" text-anchor="middle" font-family="Arial" '
+            f'font-size="20">{svg_escape(title)}</text>\n'
+            '<text x="350" y="82" text-anchor="middle" font-family="Arial" '
+            'font-size="14">No finite values to plot</text>\n'
+            "</svg>\n",
+            encoding="utf-8",
+        )
+        return
     ymin = float(np.nanmin(values))
     ymax = float(np.nanmax(values))
     if math.isclose(ymin, ymax):
@@ -334,6 +413,19 @@ def svg_heatmap(frame: pd.DataFrame, path: Path) -> None:
         values="sqnr_db_opencv_as_signal",
         aggfunc="mean",
     ).replace([np.inf, -np.inf], np.nan)
+    if pivot.empty or not np.isfinite(pivot.to_numpy(dtype=np.float64)).any():
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="120" '
+            'viewBox="0 0 700 120">\n'
+            '<rect width="100%" height="100%" fill="white"/>\n'
+            '<text x="350" y="45" text-anchor="middle" font-family="Arial" '
+            'font-size="20">Mean SQNR heatmap by group</text>\n'
+            '<text x="350" y="82" text-anchor="middle" font-family="Arial" '
+            'font-size="14">No finite values to plot</text>\n'
+            "</svg>\n",
+            encoding="utf-8",
+        )
+        return
     cell = 58
     left, top = 185, 55
     width = left + cell * len(pivot.columns) + 40
@@ -432,16 +524,18 @@ def main() -> None:
         print(f"Wrote plots to {output_dir / 'plots'}")
         return
 
-    patterns = sorted(args.pattern_dir.glob("*.png"))
+    patterns = find_patterns(args.pattern_dir)
     if not patterns:
-        raise FileNotFoundError(f"no PNG test patterns found in {args.pattern_dir}")
+        raise FileNotFoundError(
+            f"no PNG, TIFF, or SVG test patterns found in {args.pattern_dir}"
+        )
 
     total = len(patterns) * len(RATIOS)
     done = 0
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer: csv.DictWriter[str] | None = None
         for image_path in patterns:
-            source = load_grayscale(image_path)
+            source = load_rgb(image_path)
             pattern = image_path.stem
             for ratio in RATIOS:
                 done += 1

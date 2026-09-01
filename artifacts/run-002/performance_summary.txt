@@ -1,0 +1,43 @@
+OCR benchmark performance summary
+
+Aggregate rankings use micro-averaged CER (total edit distance / total reference characters).
+Lower CER is better. Individual-case ties show one deterministic example.
+
+English
+-
+- Best overall method: binning_ceil (0.00% CER, 5 tied)
+- Worst overall method: binning_ceil (0.00% CER, 5 tied)
+- Best scaling ratio: 1.000× (0.00% CER, 17 tied)
+- Worst scaling ratio: 1.000× (0.00% CER, 17 tied)
+- Best method×ratio condition: binning_ceil at 1.000× (0.00% CER, 85 tied)
+- Worst method×ratio condition: binning_ceil at 1.000× (0.00% CER, 85 tied)
+- Best non-binning method×ratio condition: lanczos2 at 1.000× (0.00% CER, 51 tied)
+- Worst non-binning method×ratio condition: lanczos2 at 1.000× (0.00% CER, 51 tied)
+- Best individual case: pattern=en_char_a, method=binning_ceil, ratio=1.000, CER=0.00%, reference='A', prediction='A' (85 cases tied at this CER)
+- Worst individual case: pattern=en_char_a, method=binning_ceil, ratio=1.000, CER=0.00%, reference='A', prediction='A' (85 cases tied at this CER)
+
+Traditional Chinese
+-
+- Best overall method: lanczos3 (8.31% CER)
+- Worst overall method: binning_ceil (17.21% CER)
+- Best scaling ratio: 2.625× (8.75% CER, 2 tied)
+- Worst scaling ratio: 1.133× (19.25% CER)
+- Best method×ratio condition: lanczos3 at 2.067× (3.75% CER)
+- Worst method×ratio condition: binning_ceil at 1.133× (57.50% CER)
+- Best non-binning method×ratio condition: lanczos3 at 2.067× (3.75% CER)
+- Worst non-binning method×ratio condition: lanczos2 at 2.333× (26.25% CER)
+- Best individual case: pattern=zh_char_01, method=binning_ceil, ratio=1.000, CER=0.00%, reference='做', prediction='做' (589 cases tied at this CER)
+- Worst individual case: pattern=zh_char_01, method=binning_ceil, ratio=1.133, CER=100.00%, reference='做', prediction='nan' (85 cases tied at this CER)
+
+Combined
+-
+- Best overall method: lanczos3 (8.21% CER)
+- Worst overall method: binning_ceil (16.99% CER)
+- Best scaling ratio: 2.625× (8.64% CER, 2 tied)
+- Worst scaling ratio: 1.133× (19.01% CER)
+- Best method×ratio condition: lanczos3 at 2.067× (3.70% CER)
+- Worst method×ratio condition: binning_ceil at 1.133× (56.79% CER)
+- Best non-binning method×ratio condition: lanczos3 at 2.067× (3.70% CER)
+- Worst non-binning method×ratio condition: lanczos2 at 2.333× (25.93% CER)
+- Best individual case: pattern=en_char_a, method=binning_ceil, ratio=1.000, CER=0.00%, reference='A', prediction='A' (674 cases tied at this CER)
+- Worst individual case: pattern=zh_char_01, method=binning_ceil, ratio=1.133, CER=100.00%, reference='做', prediction='nan' (85 cases tied at this CER)

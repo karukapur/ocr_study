@@ -2,16 +2,18 @@ import numpy as np
 import pytest
 
 from ocr_bench.resample import (
-    PHASES,
+    DEFAULT_PHASES,
+    DEFAULT_TAPS,
     Q_SCALE,
     REFERENCE_PHASES,
     REFERENCE_TAPS,
-    TAP_OFFSETS,
     box_bin,
     coefficient_bank,
     fixed_point_bilinear,
+    floating_point_bilinear,
     integer_factor,
     lanczos_resize,
+    opencv_bilinear,
     output_length,
     reference_coefficient_bank,
     reference_lanczos_resize,
@@ -47,15 +49,22 @@ def test_box_bin_rejects_partial_blocks() -> None:
 def test_coefficient_bank_is_exactly_seven_taps_sixteen_phases(lobes: int) -> None:
     bank = coefficient_bank(scale=2.0, lobes=lobes)
     assert bank.shape == (16, 7)
-    assert PHASES == 16
-    assert len(TAP_OFFSETS) == 7
+    assert DEFAULT_PHASES == 16
+    assert DEFAULT_TAPS == 7
+    np.testing.assert_array_equal(bank.astype(np.int64).sum(axis=1), Q_SCALE)
+
+
+@pytest.mark.parametrize("lobes", [2, 3])
+def test_coefficient_bank_uses_configured_taps_and_phases(lobes: int) -> None:
+    bank = coefficient_bank(scale=2.0, lobes=lobes, taps=5, phases=8)
+    assert bank.shape == (8, 5)
     np.testing.assert_array_equal(bank.astype(np.int64).sum(axis=1), Q_SCALE)
 
 
 @pytest.mark.parametrize("lobes", [2, 3])
 def test_lanczos_is_identity_at_one_x(lobes: int) -> None:
     image = np.arange(12 * 18, dtype=np.uint8).reshape(12, 18)
-    result = lanczos_resize(image, ratio=1.0, lobes=lobes)
+    result = lanczos_resize(image, scale_w=1.0, lobes=lobes)
     np.testing.assert_array_equal(result.pixels, image)
     assert result.metadata["taps"] == 7
     assert result.metadata["phases"] == 16
@@ -64,7 +73,7 @@ def test_lanczos_is_identity_at_one_x(lobes: int) -> None:
 @pytest.mark.parametrize("lobes", [2, 3])
 def test_lanczos_white_extension_preserves_white(lobes: int) -> None:
     image = np.full((12, 18), 255, dtype=np.uint8)
-    result = lanczos_resize(image, ratio=2.625, lobes=lobes)
+    result = lanczos_resize(image, scale_w=2.625, lobes=lobes)
     np.testing.assert_array_equal(result.pixels, 255)
 
 
@@ -88,6 +97,59 @@ def test_fixed_point_bilinear_is_deterministic_for_known_array() -> None:
     np.testing.assert_array_equal(result.pixels, expected)
     assert result.metadata["interpolation"] == "cv2.INTER_LINEAR deterministic clone"
     assert result.metadata["kernel"] == "opencv_inter_area_fast_2x"
+
+
+def test_floating_point_bilinear_is_deterministic_for_known_array() -> None:
+    image = (np.arange(6 * 8, dtype=np.uint8).reshape(6, 8) * 5).astype(np.uint8)
+    result = floating_point_bilinear(image, 2.0)
+    expected = np.array(
+        [
+            [23, 33, 43, 53],
+            [103, 113, 123, 133],
+            [183, 193, 203, 213],
+        ],
+        dtype=np.uint8,
+    )
+    np.testing.assert_array_equal(result.pixels, expected)
+    assert result.floating_pixels is not None
+    assert result.floating_pixels.dtype == np.float32
+    np.testing.assert_array_equal(
+        np.clip(np.floor(result.floating_pixels + np.float32(0.5)), 0, 255).astype(
+            np.uint8
+        ),
+        result.pixels,
+    )
+    assert result.metadata["coefficient_precision"] == "float32"
+    assert result.metadata["coordinate_mapping"] == "shift"
+
+
+def test_opencv_bilinear_exposes_independent_float64_output() -> None:
+    image = (np.arange(7 * 9, dtype=np.uint8).reshape(7, 9) * 3).astype(np.uint8)
+    result = opencv_bilinear(image, 1.7)
+
+    assert result.pixels.dtype == np.uint8
+    assert result.floating_pixels is not None
+    assert result.floating_pixels.dtype == np.float64
+    assert result.floating_pixels.shape == result.pixels.shape
+    assert result.metadata["floating_pixel_source"] == (
+        "cv2.INTER_LINEAR on float64 input"
+    )
+
+
+def test_original_and_shift_bilinear_mappings_differ() -> None:
+    image = (np.arange(6 * 8, dtype=np.uint8).reshape(6, 8) * 5).astype(np.uint8)
+    shifted = floating_point_bilinear(image, 2.0, interpolation="shift")
+    original = floating_point_bilinear(image, 2.0, interpolation="original")
+    assert np.any(shifted.pixels != original.pixels)
+    np.testing.assert_array_equal(
+        original.pixels,
+        np.array(
+            [[0, 10, 20, 30], [80, 90, 100, 110], [160, 170, 180, 190]],
+            dtype=np.uint8,
+        ),
+    )
+    fixed = fixed_point_bilinear(image, 2.0, interpolation="original")
+    np.testing.assert_array_equal(fixed.pixels, original.pixels)
 
 
 def test_integer_floor_and_ceil_are_identical() -> None:
@@ -129,3 +191,53 @@ def test_reflect_boundary_is_opt_in_for_benchmark_lanczos() -> None:
     assert reflected.metadata["boundary"] == "reflect101"
     assert np.any(white.pixels != reflected.pixels)
     np.testing.assert_array_equal(reflected.pixels, 0)
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "opencv_bilinear",
+        "floating_point_bilinear",
+        "fixed_point_bilinear",
+        "lanczos2",
+        "lanczos3",
+    ],
+)
+def test_interpolators_support_independent_axis_scales(method: str) -> None:
+    image = np.arange(12 * 20, dtype=np.uint8).reshape(12, 20)
+    result = resize_image(
+        image,
+        2.0,
+        method,
+        scale_h=3.0,
+        interpolation="shift",
+        boundary="reflect101",
+    )
+    assert result.pixels.shape == (4, 10)
+    assert result.metadata["actual_scale_x"] == 2.0
+    assert result.metadata["actual_scale_y"] == 3.0
+
+
+def test_reference_lanczos_supports_independent_axis_scales() -> None:
+    image = np.arange(12 * 20, dtype=np.uint8).reshape(12, 20)
+    result = reference_lanczos_resize(image, 2.0, 3.0)
+    assert result.pixels.shape == (4, 10)
+    assert result.metadata["actual_scale_x"] == 2.0
+    assert result.metadata["actual_scale_y"] == 3.0
+
+
+@pytest.mark.parametrize(
+    "resize",
+    [opencv_bilinear, floating_point_bilinear, fixed_point_bilinear],
+)
+def test_missing_height_scale_falls_back_to_width_scale(resize) -> None:
+    image = np.arange(12 * 20, dtype=np.uint8).reshape(12, 20)
+    implicit = resize(image, 2.0)
+    explicit = resize(image, 2.0, 2.0)
+    np.testing.assert_array_equal(implicit.pixels, explicit.pixels)
+
+
+def test_dispatch_rejects_anisotropic_box_binning() -> None:
+    image = np.arange(12 * 20, dtype=np.uint8).reshape(12, 20)
+    with pytest.raises(ValueError, match="does not support a separate height scale"):
+        resize_image(image, 2.0, "bin_floor", scale_h=3.0)

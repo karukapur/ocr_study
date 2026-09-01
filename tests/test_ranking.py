@@ -13,8 +13,8 @@ def test_non_binning_ranking_excludes_bins_and_breaks_ties_by_lowest_ratio() -> 
         [
             {"method": "bin_floor", "requested_ratio": 1.0, "edit_distance": 0, "reference_chars": 10, "status": "ok"},
             {"method": "bin_ceil", "requested_ratio": 3.0, "edit_distance": 10, "reference_chars": 10, "status": "ok"},
-            {"method": "lanczos3_7tap_16phase", "requested_ratio": 2.0, "edit_distance": 1, "reference_chars": 10, "status": "ok"},
-            {"method": "lanczos3_7tap_16phase", "requested_ratio": 1.8, "edit_distance": 1, "reference_chars": 10, "status": "ok"},
+            {"method": "lanczos3", "requested_ratio": 2.0, "edit_distance": 1, "reference_chars": 10, "status": "ok"},
+            {"method": "lanczos3", "requested_ratio": 1.8, "edit_distance": 1, "reference_chars": 10, "status": "ok"},
             {"method": "opencv_bilinear", "requested_ratio": 2.6, "edit_distance": 9, "reference_chars": 10, "status": "ok"},
             {"method": "opencv_bilinear", "requested_ratio": 2.333333333333, "edit_distance": 9, "reference_chars": 10, "status": "ok"},
         ]
@@ -22,7 +22,7 @@ def test_non_binning_ranking_excludes_bins_and_breaks_ties_by_lowest_ratio() -> 
 
     selected = select_method_ratio_extremes(rows)
 
-    assert selected["best"].method == "lanczos3_7tap_16phase"
+    assert selected["best"].method == "lanczos3"
     assert selected["best"].requested_ratio == 1.8
     assert selected["best"].tie_count == 2
     assert selected["worst"].method == "opencv_bilinear"
