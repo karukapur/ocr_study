@@ -12,6 +12,9 @@ Run the OpenCV-vs-fixed-point bilinear comparison:
 .venv/bin/python experiments/replicate_bilinear/compare_bilinear.py
 ```
 
+All three comparison scripts in this directory are standalone: none imports
+code from another experiment script.
+
 This reads PNG, TIFF (`.tif`/`.tiff`), and SVG files from `test_patterns/`,
 normalizes them to 8-bit RGB, downsamples each color plane at the configured
 ratios, compares OpenCV bilinear against `fixed_point_bilinear()`, and writes:
@@ -69,6 +72,33 @@ Compare OpenCV bilinear against the project's float32 bilinear implementation:
 ```bash
 .venv/bin/python experiments/replicate_bilinear/compare_bilinear_floating_psnr.py
 ```
+
+Each comparison script uses its built-in ratio sweep by default. Pass one
+value to use the same downscale ratio for width and height:
+
+```bash
+.venv/bin/python experiments/replicate_bilinear/compare_bilinear_floating_psnr.py --ratio 2.0
+```
+
+Pass width and height ratios, in that order, to scale the dimensions
+differently:
+
+```bash
+.venv/bin/python experiments/replicate_bilinear/compare_bilinear_floating_psnr.py --ratio 2.0 1.5
+```
+
+Repeat `--ratio` to run several configurations:
+
+```bash
+.venv/bin/python experiments/replicate_bilinear/compare_bilinear_floating_psnr.py \
+  --ratio 2.0 \
+  --ratio 2.0 1.5
+```
+
+The same syntax works with `compare_bilinear.py` and
+`compare_bilinear_floating_psnr_github.py`. Ratios are downscale divisors, so
+the output dimensions are approximately `source_width / width_ratio` and
+`source_height / height_ratio`.
 
 Compare OpenCV bilinear against the float64 implementation posted in OpenCV
 issue #25018:

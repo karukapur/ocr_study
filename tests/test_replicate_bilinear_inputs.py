@@ -15,6 +15,7 @@ if str(EXPERIMENT_DIR) not in sys.path:
 from compare_bilinear import (  # noqa: E402
     find_patterns,
     load_rgb,
+    parse_ratio_groups,
     plot_results,
     resize_rgb_planes,
 )
@@ -71,6 +72,29 @@ def test_resize_rgb_planes_matches_independent_channel_resizes() -> None:
     )
     np.testing.assert_array_equal(combined.pixels, expected)
     np.testing.assert_array_equal(combined.floating_pixels, expected_floating)
+
+
+def test_resize_rgb_planes_accepts_separate_width_and_height_ratios() -> None:
+    image = np.arange(12 * 8 * 3, dtype=np.uint8).reshape(12, 8, 3)
+
+    combined = resize_rgb_planes(image, 2.0, opencv_bilinear, 3.0)
+
+    assert combined.pixels.shape == (4, 4, 3)
+    expected = np.stack(
+        [
+            opencv_bilinear(image[:, :, channel], 2.0, 3.0).pixels
+            for channel in range(3)
+        ],
+        axis=2,
+    )
+    np.testing.assert_array_equal(combined.pixels, expected)
+
+
+def test_parse_ratio_groups_supports_uniform_and_separate_ratios() -> None:
+    assert parse_ratio_groups([[2.0], [2.0, 1.5]]) == (
+        (2.0, 2.0),
+        (2.0, 1.5),
+    )
 
 
 def test_plot_results_handles_all_exact_comparisons(tmp_path: Path) -> None:

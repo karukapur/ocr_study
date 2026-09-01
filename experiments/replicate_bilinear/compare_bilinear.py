@@ -5,7 +5,7 @@ import csv
 import gc
 import math
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from io import BytesIO
 from pathlib import Path
 
@@ -40,11 +40,18 @@ RATIOS = (
 PATTERN_DIR = Path(__file__).resolve().parent / "test_patterns"
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "results"
 PATTERN_SUFFIXES = frozenset({".png", ".tif", ".tiff", ".svg"})
-ResizeImplementation = Callable[[np.ndarray, float], ResizeResult]
+ResizeImplementation = Callable[[np.ndarray, float, float | None], ResizeResult]
+RatioPair = tuple[float, float]
 
 
-def ratio_slug(ratio: float) -> str:
-    return f"r_{ratio:.12f}".rstrip("0").rstrip(".").replace(".", "p")
+def _ratio_value_slug(ratio: float) -> str:
+    return f"{ratio:.12f}".rstrip("0").rstrip(".").replace(".", "p")
+
+
+def ratio_slug(ratio_w: float, ratio_h: float | None = None) -> str:
+    if ratio_h is None or ratio_h == ratio_w:
+        return f"r_{_ratio_value_slug(ratio_w)}"
+    return f"rw_{_ratio_value_slug(ratio_w)}_rh_{_ratio_value_slug(ratio_h)}"
 
 
 def find_patterns(pattern_dir: Path) -> list[Path]:
@@ -76,8 +83,9 @@ def load_rgb(path: Path) -> np.ndarray:
 
 def resize_rgb_planes(
     image: np.ndarray,
-    ratio: float,
+    ratio_w: float,
     implementation: ResizeImplementation,
+    ratio_h: float | None = None,
 ) -> ResizeResult:
     if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
         raise ValueError("resize_rgb_planes expects an RGB uint8 image")
@@ -86,7 +94,7 @@ def resize_rgb_planes(
     floating_pixels: np.ndarray | None = None
     metadata: dict[str, object] | None = None
     for channel in range(3):
-        result = implementation(image[:, :, channel], ratio)
+        result = implementation(image[:, :, channel], ratio_w, ratio_h)
         if pixels is None:
             pixels = np.empty((*result.pixels.shape, 3), dtype=np.uint8)
             metadata = result.metadata
@@ -178,17 +186,19 @@ def save_difference(path: Path, error: np.ndarray) -> None:
 def compare_pixels(
     pattern: str,
     source: np.ndarray,
-    ratio: float,
+    ratio_w: float,
+    ratio_h: float,
     output_dir: Path,
     write_images: bool,
 ) -> dict[str, object]:
-    opencv = resize_rgb_planes(source, ratio, opencv_bilinear)
-    fixed = resize_rgb_planes(source, ratio, fixed_point_bilinear)
+    opencv = resize_rgb_planes(source, ratio_w, opencv_bilinear, ratio_h)
+    fixed = resize_rgb_planes(source, ratio_w, fixed_point_bilinear, ratio_h)
     opencv_pixels = opencv.pixels
     fixed_pixels = fixed.pixels
     error = fixed_pixels.astype(np.int16) - opencv_pixels.astype(np.int16)
     abs_error = np.abs(error)
-    ratio_name = ratio_slug(ratio)
+    ratio_name = ratio_slug(ratio_w, ratio_h)
+    ratio_label = str(ratio_w) if ratio_w == ratio_h else f"{ratio_w}x{ratio_h}"
 
     if write_images:
         save_deterministic_png(
@@ -207,7 +217,9 @@ def compare_pixels(
     return {
         "pattern": pattern,
         "group": pattern_group(pattern),
-        "ratio": ratio,
+        "ratio": ratio_label,
+        "ratio_width": ratio_w,
+        "ratio_height": ratio_h,
         "ratio_slug": ratio_name,
         "source_width": source.shape[1],
         "source_height": source.shape[0],
@@ -255,7 +267,9 @@ def write_summary(results: pd.DataFrame, output_dir: Path) -> None:
     rows.append("# Bilinear Replication Report")
     rows.append("")
     rows.append(f"Patterns: {results['pattern'].nunique()}")
-    rows.append(f"Ratios: {', '.join(str(value) for value in RATIOS)}")
+    rows.append(
+        f"Ratios: {', '.join(str(value) for value in sorted(results['ratio'].unique()))}"
+    )
     rows.append(f"Comparisons: {len(results)}")
     rows.append("")
 
@@ -320,7 +334,8 @@ def svg_line_plot(
     left, right, top, bottom = 90, 220, 45, 85
     plot_width = width - left - right
     plot_height = height - top - bottom
-    ratios = sorted(float(value) for value in frame["ratio"].unique())
+    ratios = sorted(str(value) for value in frame["ratio"].unique())
+    ratio_positions = {ratio: index for index, ratio in enumerate(ratios)}
     groups = sorted(str(value) for value in frame["group"].unique())
     values = frame[value_column].replace([np.inf, -np.inf], np.nan)
     if not values.notna().any():
@@ -342,10 +357,10 @@ def svg_line_plot(
         ymin -= 1.0
         ymax += 1.0
 
-    def x_pos(ratio: float) -> float:
+    def x_pos(ratio: str) -> float:
         if len(ratios) == 1:
             return left + plot_width / 2
-        return left + (ratio - ratios[0]) / (ratios[-1] - ratios[0]) * plot_width
+        return left + ratio_positions[ratio] / (len(ratios) - 1) * plot_width
 
     def y_pos(value: float) -> float:
         return top + (ymax - value) / (ymax - ymin) * plot_height
@@ -374,7 +389,7 @@ def svg_line_plot(
     for ratio in ratios:
         x = x_pos(ratio)
         lines.append(f'<line x1="{x:.2f}" y1="{top + plot_height}" x2="{x:.2f}" y2="{top + plot_height + 6}" stroke="#222"/>')
-        lines.append(f'<text x="{x:.2f}" y="{top + plot_height + 24}" text-anchor="middle" font-family="Arial" font-size="11">{ratio:g}</text>')
+        lines.append(f'<text x="{x:.2f}" y="{top + plot_height + 24}" text-anchor="middle" font-family="Arial" font-size="11">{svg_escape(ratio)}</text>')
     for index in range(6):
         value = ymin + (ymax - ymin) * index / 5
         y = y_pos(value)
@@ -392,7 +407,7 @@ def svg_line_plot(
             value = row[value_column]
             if pd.isna(value) or math.isinf(float(value)):
                 continue
-            points.append(f"{x_pos(float(row['ratio'])):.2f},{y_pos(float(value)):.2f}")
+            points.append(f"{x_pos(str(row['ratio'])):.2f},{y_pos(float(value)):.2f}")
         if len(points) >= 2:
             lines.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}" stroke-width="2"/>')
         for point in points:
@@ -492,7 +507,24 @@ def plot_results(results: pd.DataFrame, output_dir: Path) -> None:
     svg_heatmap(finite, plots / "sqnr_heatmap_by_group.svg")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_ratio_groups(groups: Sequence[Sequence[float]] | None) -> tuple[RatioPair, ...]:
+    if groups is None:
+        return tuple((ratio, ratio) for ratio in RATIOS)
+    ratios: list[RatioPair] = []
+    for group in groups:
+        if len(group) == 1:
+            ratio_w = ratio_h = group[0]
+        elif len(group) == 2:
+            ratio_w, ratio_h = group
+        else:
+            raise ValueError("each --ratio accepts either WIDTH or WIDTH HEIGHT")
+        if ratio_w <= 0 or ratio_h <= 0:
+            raise ValueError("ratios must be positive")
+        ratios.append((ratio_w, ratio_h))
+    return tuple(ratios)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pattern-dir", type=Path, default=PATTERN_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
@@ -506,7 +538,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="reuse an existing metrics CSV and only regenerate summary/plots",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--ratio",
+        type=float,
+        nargs="+",
+        action="append",
+        metavar="RATIO",
+        help=(
+            "ratio WIDTH [HEIGHT]; one value applies to both dimensions. "
+            "Repeat --ratio to run multiple ratio configurations"
+        ),
+    )
+    args = parser.parse_args(argv)
+    try:
+        args.ratios = parse_ratio_groups(args.ratio)
+    except ValueError as error:
+        parser.error(str(error))
+    return args
 
 
 def main() -> None:
@@ -530,20 +578,27 @@ def main() -> None:
             f"no PNG, TIFF, or SVG test patterns found in {args.pattern_dir}"
         )
 
-    total = len(patterns) * len(RATIOS)
+    total = len(patterns) * len(args.ratios)
     done = 0
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer: csv.DictWriter[str] | None = None
         for image_path in patterns:
             source = load_rgb(image_path)
             pattern = image_path.stem
-            for ratio in RATIOS:
+            for ratio_w, ratio_h in args.ratios:
                 done += 1
-                print(f"[{done}/{total}] {image_path.name} ratio={ratio}", flush=True)
+                ratio_label = (
+                    str(ratio_w) if ratio_w == ratio_h else f"{ratio_w}x{ratio_h}"
+                )
+                print(
+                    f"[{done}/{total}] {image_path.name} ratio={ratio_label}",
+                    flush=True,
+                )
                 record = compare_pixels(
                     pattern=pattern,
                     source=source,
-                    ratio=ratio,
+                    ratio_w=ratio_w,
+                    ratio_h=ratio_h,
                     output_dir=output_dir,
                     write_images=args.write_images,
                 )
