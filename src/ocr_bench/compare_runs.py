@@ -105,6 +105,7 @@ def _strip_volatile(value: Any) -> Any:
             for key, item in value.items()
             if key
             not in {
+                "git_commit",
                 "software",
                 "ocr_seconds",
                 "elapsed_seconds",

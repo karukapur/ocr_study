@@ -5,6 +5,7 @@ import importlib.metadata
 import json
 import math
 import platform
+import subprocess
 import sys
 import binascii
 import struct
@@ -13,6 +14,23 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+def git_commit_hash() -> str | None:
+    repository = Path(__file__).resolve().parents[2]
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and commit else None
 
 
 def sha256_file(path: Path) -> str:

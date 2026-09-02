@@ -15,6 +15,7 @@ from .metrics import aggregate_rows, character_error_rate, normalize_text
 from .ocr import run_tesseract, tesseract_language, validate_tesseract
 from .resample import ResizeResult, resize_image
 from .util import (
+    git_commit_hash,
     pixel_sha256,
     read_json,
     save_deterministic_png,
@@ -464,6 +465,7 @@ def run_study(
     _write_csv(output / "aggregate_results.csv", aggregate, AGGREGATE_FIELDS)
     manifest: dict[str, Any] = {
         "schema_version": 1,
+        "git_commit": git_commit_hash(),
         "config_path": (
             _portable_path(config.source_path, config.source_path.parent)
             if exact

@@ -1,10 +1,16 @@
 from io import BytesIO
 from pathlib import Path
+import subprocess
 
 import numpy as np
 from PIL import Image
 
-from ocr_bench.util import deterministic_png_bytes, normalize_lf_text, pixel_sha256
+from ocr_bench.util import (
+    deterministic_png_bytes,
+    git_commit_hash,
+    normalize_lf_text,
+    pixel_sha256,
+)
 
 
 def test_pixel_hash_is_independent_of_png_encoding(tmp_path: Path) -> None:
@@ -41,3 +47,22 @@ def test_rgb_pixel_hash_and_deterministic_png_are_stable() -> None:
 def test_text_normalization_uses_utf8_and_lf() -> None:
     assert normalize_lf_text("a\r\nb\rc") == "a\nb\nc"
     assert normalize_lf_text("測試\r\n".encode("utf-8")) == "測試\n"
+
+
+def test_git_commit_hash_returns_head(monkeypatch) -> None:
+    commit = "a" * 40
+    monkeypatch.setattr(
+        "ocr_bench.util.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, commit + "\n", ""),
+    )
+
+    assert git_commit_hash() == commit
+
+
+def test_git_commit_hash_returns_none_when_git_is_unavailable(monkeypatch) -> None:
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("ocr_bench.util.subprocess.run", unavailable)
+
+    assert git_commit_hash() is None

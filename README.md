@@ -186,11 +186,12 @@ ringing, so Lanczos-4 is not an unqualified higher-quality reference.
 - `aggregate_results.csv`: English, Traditional Chinese, and combined CER
 - `performance_summary.txt`: concise best/worst cases, methods, and ratios
 - `performance_extremes.csv`: structured best/worst summary records
+- `benchmark_config.yaml`: exact copy of the configuration used for the run
 - `comparison_exports/`: optional natural/Imatest golden and candidate pairs
 - `plots/`: combined and per-language CER curves, heatmaps, and glyph-height plots
 - `montage/`: per-pattern 2.625x visual method comparisons
-- `run_manifest.json`: complete reproducibility metadata, including Lanczos
-  coefficient banks
+- `run_manifest.json`: complete reproducibility metadata, including the Git
+  commit when available and Lanczos coefficient banks
 
 At fractional requested ratios, floor and ceiling binning deliberately use an
 integer effective factor. For example, 1.625x uses 1x floor binning and 2x

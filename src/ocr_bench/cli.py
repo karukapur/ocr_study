@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
 from .config import load_config
 from .dataset import generate_sources
 from .pipeline import run_study
+
+
+def _snapshot_config(config_path: Path, output: Path) -> Path:
+    destination = output / "benchmark_config.yaml"
+    if config_path.resolve() == destination.resolve():
+        return destination
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copyfile(config_path, temporary)
+    temporary.replace(destination)
+    return destination
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -84,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
                 "home directory, or project root"
             )
         output.mkdir(parents=True, exist_ok=True)
+        _snapshot_config(config.source_path, output)
         if args.command in {"generate", "all"}:
             manifest = generate_sources(
                 config,
