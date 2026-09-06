@@ -19,3 +19,4 @@ __pycache__/
 experiments/replicate_bilinear/test_patterns/
 experiments/replicate_bilinear/results/
 artifacts/*
+.foglamp/
