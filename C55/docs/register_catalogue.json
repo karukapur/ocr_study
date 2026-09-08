@@ -1,0 +1,243 @@
+{
+  "title": "C55 crop and resampler register reference",
+  "registers": [
+    {
+      "name": "Pipeline: Bypass crop",
+      "source": "C55 screenshot",
+      "description": "Bypass the crop module.",
+      "units": "flag",
+      "known_width": "Not specified",
+      "allowed_values": "0=not bypassed; 1=bypassed",
+      "example": 0,
+      "validation": "Must be 0 or 1; bypass takes precedence over enable.",
+      "status": "Active"
+    },
+    {
+      "name": "Crop: Enable crop",
+      "source": "C55 screenshot",
+      "description": "Enable the crop module.",
+      "units": "flag",
+      "known_width": "Not specified",
+      "allowed_values": "0=off; 1=on",
+      "example": 1,
+      "validation": "Must be 0 or 1; crop operates only when bypass=0 and enable=1.",
+      "status": "Active when not bypassed"
+    },
+    {
+      "name": "Crop: start x",
+      "source": "C55 screenshot",
+      "description": "Horizontal margin removed from the left side.",
+      "units": "pixels",
+      "known_width": "Not specified",
+      "allowed_values": "Nonnegative when crop is active",
+      "example": 16,
+      "validation": "Active crop must fit inside the actual input frame.",
+      "status": "Geometry ignored when crop is inactive"
+    },
+    {
+      "name": "Crop: start y",
+      "source": "C55 screenshot",
+      "description": "Vertical margin removed from the top side.",
+      "units": "lines",
+      "known_width": "Not specified",
+      "allowed_values": "Nonnegative when crop is active",
+      "example": 8,
+      "validation": "Active crop must fit inside the actual input frame.",
+      "status": "Geometry ignored when crop is inactive"
+    },
+    {
+      "name": "Crop: size x",
+      "source": "C55 screenshot",
+      "description": "Width of the cropped image.",
+      "units": "pixels",
+      "known_width": "Not specified",
+      "allowed_values": "Positive when crop is active",
+      "example": 640,
+      "validation": "Active crop must fit; effective scaler width must be divisible by 8.",
+      "status": "Geometry ignored when crop is inactive"
+    },
+    {
+      "name": "Crop: size y",
+      "source": "C55 screenshot",
+      "description": "Height of the cropped image.",
+      "units": "lines",
+      "known_width": "Not specified",
+      "allowed_values": "Positive when crop is active",
+      "example": 480,
+      "validation": "Active crop must fit; effective scaler height must be divisible by 8.",
+      "status": "Geometry ignored when crop is inactive"
+    },
+    {
+      "name": "vfilt_tinc",
+      "source": "C55 screenshot",
+      "description": "Vertical input height divided by output height, in 4.20 format.",
+      "units": "input lines/output line",
+      "known_width": "4.20 numeric format; storage width not specified",
+      "allowed_values": "Wrapper: 2^20 through 2^24-1",
+      "example": 2097152,
+      "validation": "Must equal (height_in << 20) // oheight; slide ratio limits also apply.",
+      "status": "Validated only; not used to advance coordinates"
+    },
+    {
+      "name": "height_in",
+      "source": "C55 screenshot",
+      "description": "Height of the frame entering the scaler.",
+      "units": "lines",
+      "known_width": "Not specified",
+      "allowed_values": "Positive; divisible by 8",
+      "example": 480,
+      "validation": "Must equal effective crop height, or actual frame height when crop is inactive.",
+      "status": "Active"
+    },
+    {
+      "name": "oheight",
+      "source": "C55 screenshot",
+      "description": "Height of the output frame.",
+      "units": "lines",
+      "known_width": "Not specified",
+      "allowed_values": "Positive; height_in <= 8*oheight <= 7*height_in",
+      "example": 240,
+      "validation": "Explicit output dimension; no automatic output-size rounding.",
+      "status": "Active"
+    },
+    {
+      "name": "vfilt_coefset",
+      "source": "C55 screenshot",
+      "description": "Select one of 16 vertical scaler coefficient sets.",
+      "units": "bank index",
+      "known_width": "4 bits",
+      "allowed_values": "Hardware selector: 0-15; wrapper accepts only 0",
+      "example": 0,
+      "validation": "Zero is an inactive placeholder, not a known bilinear bank; nonzero rejected.",
+      "status": "Inactive; no LUT filtering"
+    },
+    {
+      "name": "hfilt_tinc",
+      "source": "C55 screenshot",
+      "description": "Horizontal input width divided by output width, in 4.20 format.",
+      "units": "input pixels/output pixel",
+      "known_width": "4.20 numeric format; storage width not specified",
+      "allowed_values": "Wrapper: 2^20 through 2^24-1",
+      "example": 2097152,
+      "validation": "Must equal (width_in << 20) // owidth; screenshot says heights, an apparent typo.",
+      "status": "Validated only; not used to advance coordinates"
+    },
+    {
+      "name": "width_in",
+      "source": "C55 screenshot",
+      "description": "Width of the frame entering the scaler.",
+      "units": "pixels",
+      "known_width": "Not specified",
+      "allowed_values": "Positive; divisible by 8",
+      "example": 640,
+      "validation": "Must equal effective crop width, or actual frame width when crop is inactive.",
+      "status": "Active"
+    },
+    {
+      "name": "owidth",
+      "source": "C55 screenshot",
+      "description": "Width of the output frame.",
+      "units": "pixels",
+      "known_width": "Not specified",
+      "allowed_values": "Positive; width_in <= 8*owidth <= 7*width_in",
+      "example": 320,
+      "validation": "Explicit output dimension; no automatic output-size rounding.",
+      "status": "Active"
+    },
+    {
+      "name": "hfilt_coefset",
+      "source": "C55 screenshot",
+      "description": "Select one of 16 horizontal scaler coefficient sets.",
+      "units": "bank index",
+      "known_width": "4 bits",
+      "allowed_values": "Hardware selector: 0-15; wrapper accepts only 0",
+      "example": 0,
+      "validation": "Zero is an inactive placeholder, not a known bilinear bank; nonzero rejected.",
+      "status": "Inactive; no LUT filtering"
+    },
+    {
+      "name": "Resampler: method",
+      "source": "Software-only control",
+      "description": "Select the wrapper resampling method.",
+      "units": "selector",
+      "known_width": "No hardware width assigned",
+      "allowed_values": "0=nearest; 1=bilinear; 2=average",
+      "example": 1,
+      "validation": "Only the three listed integers are accepted.",
+      "status": "Active"
+    },
+    {
+      "name": "Resampler: interpolation",
+      "source": "Software-only control",
+      "description": "Select the dimension-based coordinate mapping for all methods.",
+      "units": "selector",
+      "known_width": "No hardware width assigned",
+      "allowed_values": "0=original; 1=shift",
+      "example": 1,
+      "validation": "Original: x=u*W/M; shift: x=(u+1/2)*W/M-1/2; likewise vertically.",
+      "status": "Active"
+    }
+  ],
+  "notes": [
+    {
+      "topic": "Authority",
+      "text": "Register names and descriptions come from the supplied Crop and Down scaler screenshots. The Resampler slide supplies the divisibility-by-8 and output/input ratio [1/8, 7/8] limits. The boundary document proposes consistency and edge policies; it does not establish exact C55 hardware behavior. Validation rules and software controls here are the adopted wrapper contract."
+    },
+    {
+      "topic": "Input and future YUV",
+      "text": "This version accepts only nonempty uint8 RGB arrays with three full-resolution channels and RGB image files. Eventual pipeline input will be YUV. YUV is not interchangeable with RGB; layout, chroma subsampling, range and conversion must be specified during future integration. No YUV conversion is implemented."
+    },
+    {
+      "topic": "Fixed-point bilinear",
+      "text": "The wrapper calls unchanged ocr_bench.resample.fixed_point_bilinear independently per channel. It uses floating-point coordinate/coefficient setup, 11 fractional coefficient bits, and integer pixel accumulation with existing OpenCV-compatible rounding and special cases. It does not call OpenCV or the floating-point bilinear function. This is not an integer-only or hardware-bit-exact model."
+    },
+    {
+      "topic": "Increments and dimensions",
+      "text": "The wrapper assumes unsigned Q4.20 and checks truncation using integer division. Increments validate dimensions but do not drive sampling. Output dimensions are explicit, so the slide's output-size rounding step is not exposed as a scale-input API. No undocumented hardware address, storage width, dimension maximum, or bank contents are assigned."
+    },
+    {
+      "topic": "Sampling and boundaries",
+      "text": "Original samples x=u*W/M; shift samples x=(u+1/2)*W/M-1/2. Nearest uses exact rational coordinates and round-half-up indices. Average uses the four floor/floor+1 neighbors and (sum+2)//4, not area averaging. Clamp every selected neighbor to the effective crop edge. RGB channels are sampled independently without color conversion."
+    },
+    {
+      "topic": "Frame validation",
+      "text": "All 16 fields are required integers (booleans excluded). Unknown and duplicate JSON keys are rejected. Inactive crop geometry is ignored after type validation. Array shape is the available frame extent; cropped dimensions must match scaler registers. Short or malformed decoded input fails; border extension never supplies missing frame data. Stream framing is outside this array/file interface."
+    },
+    {
+      "topic": "Scale limits",
+      "text": "Both effective scaler input dimensions must be divisible by 8, even when crop is inactive. Each output/input ratio must lie in [1/8, 7/8]. Identity and enlargement are rejected. An 8x8 input may produce 1x1 output; odd output dimensions are allowed. These slide limits are stricter than general bilinear mathematics."
+    },
+    {
+      "topic": "Coefficient selectors",
+      "text": "Both selectors accept only zero as an inactive placeholder. No coefficient LUT is loaded or executed. This does not claim hardware bank zero is bilinear. Coefficient signedness, numerical normalization, and the hardware phase-selection rules were not supplied."
+    },
+    {
+      "topic": "LUT index discrepancy",
+      "text": "The screenshot labels its last set-15/phase-31 rows as 511 and 512. The stated 16 sets x 32 phases x 2 words instead implies 1024 words, indexed 0-1023. Under sequential packing, word0=64*set+2*phase and word1=word0+1; the final pair would be 1022/1023. This arithmetic is an inference, not a correction to verified hardware documentation."
+    },
+    {
+      "topic": "Horizontal ratio typo",
+      "text": "The hfilt_tinc screenshot describes horizontal input/output heights. The wrapper uses widths, consistent with the horizontal axis and width_in/owidth."
+    },
+    {
+      "topic": "Hardware port",
+      "text": "Python integers prevent overflow in validation and nearest/average coordinate arithmetic. A C port must bound dimensions and choose widths for shifts, coordinate products and addresses; four uint8 samples sum to at most 1020. Hardware equivalence still requires verified phases, coefficients, intermediate precision, rounding, border behavior, formats and limits."
+    }
+  ],
+  "lut": [
+    {
+      "word": "First word of each set/phase",
+      "bits_31_24": "Coefficient3",
+      "bits_23_16": "Coefficient2",
+      "bits_15_8": "Coefficient1",
+      "bits_7_0": "Coefficient 0"
+    },
+    {
+      "word": "Second word of each set/phase",
+      "bits_31_24": "0",
+      "bits_23_16": "Coefficient6",
+      "bits_15_8": "Coefficient5",
+      "bits_7_0": "Coefficient4"
+    }
+  ]
+}

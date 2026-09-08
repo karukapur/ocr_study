@@ -1,0 +1,18 @@
+{
+  "Pipeline: Bypass crop": 0,
+  "Crop: Enable crop": 1,
+  "Crop: start x": 16,
+  "Crop: start y": 8,
+  "Crop: size x": 640,
+  "Crop: size y": 480,
+  "vfilt_tinc": 2097152,
+  "height_in": 480,
+  "oheight": 240,
+  "vfilt_coefset": 0,
+  "hfilt_tinc": 2097152,
+  "width_in": 640,
+  "owidth": 320,
+  "hfilt_coefset": 0,
+  "Resampler: method": 1,
+  "Resampler: interpolation": 1
+}
