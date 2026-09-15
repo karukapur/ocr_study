@@ -20,3 +20,11 @@ experiments/replicate_bilinear/test_patterns/
 experiments/replicate_bilinear/results/
 artifacts/*
 .foglamp/
+
+# Generated C55 coefficients, register references, and run outputs
+/C55/bilinear_coefficients.json
+/C55/docs/registers.md
+/C55/docs/registers.xlsx
+/C55/outputs/
+# Output path used by earlier C55 README examples
+/output.png

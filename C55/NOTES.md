@@ -240,3 +240,72 @@ Other current implementation constraints, distinct from universal bilinear math:
 
 This note addition changes documentation only. It does not modify any processing
 contract or implementation.
+
+
+## 2026-09-15 — Authorized replacement with register-driven row streaming
+
+The user approved replacing the C55 main path with a three-stage pipeline:
+frame setup, coordinate/phase generation, and interpolation. This entry supersedes
+the **current implementation** descriptions in the 2026-09-08 entry; those earlier
+statements accurately describe the former version and remain above as history.
+
+- SE supplies dimensions and Q4.20 increments; strict consistency checks remain.
+  The increments now drive coordinates instead of being validation-only fields.
+- Original mapping starts at zero. Shift mapping starts at `(T/2^20-1)/2`.
+  Internal Q21 state preserves the half-bit and advances by `2*T`. Horizontal
+  state resets per row and vertical state per frame.
+- NRE means nearest-even. Fractional coordinates select one of 32 phases;
+  phase 32 carries into the sampling base and becomes phase zero. Quantized
+  coordinates never feed back into the accumulated coordinate.
+- Both selectors now select a real software bilinear bank zero. The PC generator
+  writes seven signed 8-bit slots per phase, offsets `[-3,-2,-1,0,1,2,3]`, and
+  weights `[0,0,0,64-2*p,2*p,0,0]`. These are model conventions; the old screenshot
+  did not establish them, and hardware bank zero is not claimed to be bilinear.
+- The public Linux driver's Q4.20 scaling is explicit. Interpreting its packed
+  coefficient bytes as signed values suggests normalization 64; that interpretation
+  is an inference. It does not verify tap origin, phase ordering, intermediate
+  rounding, or complete hardware equivalence. Reference:
+  https://codebrowser.dev/linux/linux/drivers/media/platform/arm/mali-c55/mali-c55-resizer.c.html
+- Bilinear preserves horizontal scale-64 sums and scale-4096 vertical sums until
+  final nearest-even rounding and uint8 clamping. The local streaming path replaces
+  C55's call to the shared Q11 kernel; the benchmark kernel itself is unchanged.
+- Nearest retains half-up rounding and average retains `(sum+2)//4`; their
+  coordinates now use the programmed increment, without phase quantization.
+- `resize_rows` latches setup, consumes full RGB rows, applies crop incrementally,
+  and retains at most seven filtered rows. It validates skipped/trailing input and
+  rejects short, extra, or malformed rows. Outputs remain provisional until the
+  iterator successfully exhausts. The array and image CLI adapters collect this
+  same runtime. They do not provide bounded full-image decode/encode memory.
+- Repeated integer addition is exact here. Truncating the increment introduces
+  drift proportional to output position; phase rounding adds a separate bounded
+  error. The new diagnostics compare both against exact rational coordinates.
+  2.625 is exactly representable; nonrepresentable ratios are necessary to expose
+  increment drift. The example is now 168×168 → 64×64 with original mapping.
+- RGB, crop precedence, dimension limits, and explicit output sizes remain.
+  YUV, arbitrary seven-tap anti-alias filter design, clock-cycle handshakes,
+  drift correction, and hardware bit equivalence are outside this iteration.
+
+See [the processing contract](docs/README.md) for interfaces, commands, numerical
+rules, and diagnostic output. Register references are regenerated together from
+the updated catalogue. Earlier notes and the general boundary document are not
+rewritten into hardware requirements.
+
+## 2026-09-15 — README moved to the C55 root
+
+At the user's request, the usage and processing README moved from
+`C55/docs/README.md` to [C55/README.md](README.md). Earlier entries linking to
+`docs/README.md` refer to its former location; their historical text is retained.
+The README includes the PC coefficient-generation command and explains that the
+shipped `bilinear_coefficients.json` is generated separately and loaded at runtime.
+Supporting register and boundary references remain in `docs/`.
+
+## 2026-09-15 — Generate artifacts locally on each platform
+
+The user requested that Windows generate its own artifacts. Coefficient JSON,
+generated register Markdown and workbook, and `C55/outputs/` are now ignored by
+Git. Existing generated files are removed from Git's index while local copies
+remain. The earlier references to a "shipped" coefficient bank describe the
+previous distribution policy; fresh checkouts now require local generation.
+The source generators, register example, and reference catalogue remain tracked.
+The [README](README.md) lists each artifact and includes Windows PowerShell
+setup, coefficient/reference generation, resampling, diagnostics, and test commands.

@@ -30,7 +30,7 @@
       "units": "pixels",
       "known_width": "Not specified",
       "allowed_values": "Nonnegative when crop is active",
-      "example": 16,
+      "example": 0,
       "validation": "Active crop must fit inside the actual input frame.",
       "status": "Geometry ignored when crop is inactive"
     },
@@ -41,7 +41,7 @@
       "units": "lines",
       "known_width": "Not specified",
       "allowed_values": "Nonnegative when crop is active",
-      "example": 8,
+      "example": 0,
       "validation": "Active crop must fit inside the actual input frame.",
       "status": "Geometry ignored when crop is inactive"
     },
@@ -52,7 +52,7 @@
       "units": "pixels",
       "known_width": "Not specified",
       "allowed_values": "Positive when crop is active",
-      "example": 640,
+      "example": 168,
       "validation": "Active crop must fit; effective scaler width must be divisible by 8.",
       "status": "Geometry ignored when crop is inactive"
     },
@@ -63,7 +63,7 @@
       "units": "lines",
       "known_width": "Not specified",
       "allowed_values": "Positive when crop is active",
-      "example": 480,
+      "example": 168,
       "validation": "Active crop must fit; effective scaler height must be divisible by 8.",
       "status": "Geometry ignored when crop is inactive"
     },
@@ -74,9 +74,9 @@
       "units": "input lines/output line",
       "known_width": "4.20 numeric format; storage width not specified",
       "allowed_values": "Wrapper: 2^20 through 2^24-1",
-      "example": 2097152,
+      "example": 2752512,
       "validation": "Must equal (height_in << 20) // oheight; slide ratio limits also apply.",
-      "status": "Validated only; not used to advance coordinates"
+      "status": "Active; advances register-driven coordinates"
     },
     {
       "name": "height_in",
@@ -85,7 +85,7 @@
       "units": "lines",
       "known_width": "Not specified",
       "allowed_values": "Positive; divisible by 8",
-      "example": 480,
+      "example": 168,
       "validation": "Must equal effective crop height, or actual frame height when crop is inactive.",
       "status": "Active"
     },
@@ -96,7 +96,7 @@
       "units": "lines",
       "known_width": "Not specified",
       "allowed_values": "Positive; height_in <= 8*oheight <= 7*height_in",
-      "example": 240,
+      "example": 64,
       "validation": "Explicit output dimension; no automatic output-size rounding.",
       "status": "Active"
     },
@@ -106,10 +106,10 @@
       "description": "Select one of 16 vertical scaler coefficient sets.",
       "units": "bank index",
       "known_width": "4 bits",
-      "allowed_values": "Hardware selector: 0-15; wrapper accepts only 0",
+      "allowed_values": "Hardware selector: 0-15; model supports only software bank 0",
       "example": 0,
-      "validation": "Zero is an inactive placeholder, not a known bilinear bank; nonzero rejected.",
-      "status": "Inactive; no LUT filtering"
+      "validation": "Zero selects the PC-generated software bilinear bank; nonzero rejected. Hardware bank contents are not inferred.",
+      "status": "Active for bilinear; validated but unused for nearest/average"
     },
     {
       "name": "hfilt_tinc",
@@ -118,9 +118,9 @@
       "units": "input pixels/output pixel",
       "known_width": "4.20 numeric format; storage width not specified",
       "allowed_values": "Wrapper: 2^20 through 2^24-1",
-      "example": 2097152,
+      "example": 2752512,
       "validation": "Must equal (width_in << 20) // owidth; screenshot says heights, an apparent typo.",
-      "status": "Validated only; not used to advance coordinates"
+      "status": "Active; advances register-driven coordinates"
     },
     {
       "name": "width_in",
@@ -129,7 +129,7 @@
       "units": "pixels",
       "known_width": "Not specified",
       "allowed_values": "Positive; divisible by 8",
-      "example": 640,
+      "example": 168,
       "validation": "Must equal effective crop width, or actual frame width when crop is inactive.",
       "status": "Active"
     },
@@ -140,7 +140,7 @@
       "units": "pixels",
       "known_width": "Not specified",
       "allowed_values": "Positive; width_in <= 8*owidth <= 7*width_in",
-      "example": 320,
+      "example": 64,
       "validation": "Explicit output dimension; no automatic output-size rounding.",
       "status": "Active"
     },
@@ -150,10 +150,10 @@
       "description": "Select one of 16 horizontal scaler coefficient sets.",
       "units": "bank index",
       "known_width": "4 bits",
-      "allowed_values": "Hardware selector: 0-15; wrapper accepts only 0",
+      "allowed_values": "Hardware selector: 0-15; model supports only software bank 0",
       "example": 0,
-      "validation": "Zero is an inactive placeholder, not a known bilinear bank; nonzero rejected.",
-      "status": "Inactive; no LUT filtering"
+      "validation": "Zero selects the PC-generated software bilinear bank; nonzero rejected. Hardware bank contents are not inferred.",
+      "status": "Active for bilinear; validated but unused for nearest/average"
     },
     {
       "name": "Resampler: method",
@@ -169,12 +169,12 @@
     {
       "name": "Resampler: interpolation",
       "source": "Software-only control",
-      "description": "Select the dimension-based coordinate mapping for all methods.",
+      "description": "Select the register-driven coordinate mapping for all methods.",
       "units": "selector",
       "known_width": "No hardware width assigned",
       "allowed_values": "0=original; 1=shift",
-      "example": 1,
-      "validation": "Original: x=u*W/M; shift: x=(u+1/2)*W/M-1/2; likewise vertically.",
+      "example": 0,
+      "validation": "With s=T/2^20: original x=u*s; shift x=(u+1/2)*s-1/2; likewise vertically.",
       "status": "Active"
     }
   ],
@@ -189,19 +189,19 @@
     },
     {
       "topic": "Fixed-point bilinear",
-      "text": "The wrapper calls unchanged ocr_bench.resample.fixed_point_bilinear independently per channel. It uses floating-point coordinate/coefficient setup, 11 fractional coefficient bits, and integer pixel accumulation with existing OpenCV-compatible rounding and special cases. It does not call OpenCV or the floating-point bilinear function. This is not an integer-only or hardware-bit-exact model."
+      "text": "C55 uses its local row-streaming implementation. The PC-generated software bank has 32 phases and seven signed 8-bit slots, with weights [0,0,0,64-2*p,2*p,0,0] at phase p. Horizontal sums retain scale 64; vertical sums retain scale 4096 until final nearest-even rounding and uint8 saturation. The independent ocr_bench.resample benchmark kernel is unchanged. This integer processing contract is not verified C55 hardware arithmetic."
     },
     {
       "topic": "Increments and dimensions",
-      "text": "The wrapper assumes unsigned Q4.20 and checks truncation using integer division. Increments validate dimensions but do not drive sampling. Output dimensions are explicit, so the slide's output-size rounding step is not exposed as a scale-input API. No undocumented hardware address, storage width, dimension maximum, or bank contents are assigned."
+      "text": "Unsigned Q4.20 increments are checked against truncated integer division and drive sampling. Q21 coordinate state advances by 2*T, initialized to zero for original mapping or T-2^20 for shift. Dimensions determine bounds and output count. No undocumented hardware address, storage width, or dimension maximum is assigned."
     },
     {
       "topic": "Sampling and boundaries",
-      "text": "Original samples x=u*W/M; shift samples x=(u+1/2)*W/M-1/2. Nearest uses exact rational coordinates and round-half-up indices. Average uses the four floor/floor+1 neighbors and (sum+2)//4, not area averaging. Clamp every selected neighbor to the effective crop edge. RGB channels are sampled independently without color conversion."
+      "text": "For s=T/2^20, original samples x=u*s and shift samples x=(u+1/2)*s-1/2. Bilinear quantizes the fractional coordinate to 32 phases using nearest-even rounding; phase 32 carries into the base and becomes phase 0, without altering accumulator state. Nearest rounds the unquantized coordinate half up. Average uses unquantized floor/floor+1 neighbors and (sum+2)//4, not area averaging. Clamp selected neighbors to the effective crop edge and process RGB channels independently."
     },
     {
       "topic": "Frame validation",
-      "text": "All 16 fields are required integers (booleans excluded). Unknown and duplicate JSON keys are rejected. Inactive crop geometry is ignored after type validation. Array shape is the available frame extent; cropped dimensions must match scaler registers. Short or malformed decoded input fails; border extension never supplies missing frame data. Stream framing is outside this array/file interface."
+      "text": "All 16 fields are required integers (booleans excluded). Unknown and duplicate JSON keys are rejected. Inactive crop geometry is ignored after type validation. Setup and coefficients are latched before input consumption. The row API validates frame_shape and every input row, including cropped-out and trailing rows; short, extra, or malformed rows fail. Output is provisional until successful iterator exhaustion. The array adapter and image CLI collect the same streaming implementation."
     },
     {
       "topic": "Scale limits",
@@ -209,7 +209,7 @@
     },
     {
       "topic": "Coefficient selectors",
-      "text": "Both selectors accept only zero as an inactive placeholder. No coefficient LUT is loaded or executed. This does not claim hardware bank zero is bilinear. Coefficient signedness, numerical normalization, and the hardware phase-selection rules were not supplied."
+      "text": "Both selectors select software bilinear bank zero; other banks are rejected. The deterministic PC-generated JSON is loaded and strictly validated, including its bilinear weights. Nearest and average do not use the LUT. Signed 8-bit storage, normalization 64, offsets -3..3, and phase rules are explicit software conventions, not claims about hardware bank zero. The public Linux driver explicitly identifies Q4.20 scaling; interpreting its packed coefficient bytes as signed values suggests normalization 64 (an inference). See https://codebrowser.dev/linux/linux/drivers/media/platform/arm/mali-c55/mali-c55-resizer.c.html."
     },
     {
       "topic": "LUT index discrepancy",
@@ -221,7 +221,11 @@
     },
     {
       "topic": "Hardware port",
-      "text": "Python integers prevent overflow in validation and nearest/average coordinate arithmetic. A C port must bound dimensions and choose widths for shifts, coordinate products and addresses; four uint8 samples sum to at most 1020. Hardware equivalence still requires verified phases, coefficients, intermediate precision, rounding, border behavior, formats and limits."
+      "text": "Coordinate and validation arithmetic use unbounded Python integers. Pixel intermediates use int64; the nonnegative normalized bilinear bank bounds horizontal sums by 16320 and vertical sums by 1044480. Average sums are at most 1020. A C port must bound dimensions and choose widths for coordinate state, shifts, and addresses. Hardware equivalence requires verified phases, coefficients, intermediate precision, rounding, boundaries, formats, and limits."
+    },
+    {
+      "topic": "Accumulation error and streaming memory",
+      "text": "Repeated integer addition adds no rounding error absent overflow. With delta=T/2^20-input/output, coordinate drift is u*delta for original mapping and (u+1/2)*delta for shift. Nearest-even phase selection adds at most 1/64 input pixel relative to the programmed coordinate, without feeding back into the accumulator. The phase diagnostic command writes exact-coordinate CSV traces and a summary of separate errors. Runtime retains at most seven filtered rows (at most two for these kernels); image decoding/collection and clock-cycle handshakes are outside that buffer bound."
     }
   ],
   "lut": [
